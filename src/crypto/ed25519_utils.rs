@@ -7,7 +7,7 @@ pub fn generate_keypair() -> SigningKey{
 }
 
 pub fn sign_message(signing_key: &SigningKey, message: &[u8]) -> Signature {
-   signing_key.sign(message_bytes)
+   signing_key.sign(message)
 }
 
 pub fn verify_signature(pubkey: &VerifyingKey, message: &[u8], signature: &Signature) -> bool {
