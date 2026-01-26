@@ -123,15 +123,19 @@ pub struct TaxObligation {
     pub event_hash: HASH,
     pub user_id: PublicKey,
     pub coin_amount: u64,
-    pub government_log_hash: HASH,
+    pub government_log: GovernmentRuleLog,
     pub sequence_number: u64,
+    pub previous_receipt_hash: Option<HASH>,
     #[serde(with = "BigArray")]
-    pub user_signature:SIGNATURE,
+    pub user_signature: SIGNATURE,
+    pub obligation_hash: HASH,
 }
+
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TaxReceipt {
     pub obligation_hash: HASH,
+    pub previous_receipt_hash: Option<HASH>,
     pub payment_slot: u64,      
     pub coins_transferred: u64,
     #[serde(with = "BigArray")]

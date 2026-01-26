@@ -270,7 +270,7 @@ mod tests {
                 ActionRule {
                     energy_cost: 10,
                     resource_reward: ResourceDelta { wheat: 0, wood: 0, coins: 0 },
-                    maturation_iterations: 1_000_000,
+                    maturation_iterations: 1_000,
                 },
             );
             rules.insert(
@@ -278,7 +278,7 @@ mod tests {
                 ActionRule {
                     energy_cost: 5,
                     resource_reward: ResourceDelta { wheat: 50, wood: 0, coins: 20 },
-                    maturation_iterations: 1_000_000,
+                    maturation_iterations: 1_000,
                 },
             );
         }

@@ -7,6 +7,7 @@ use anyhow::{Result, anyhow};
 pub struct GovernmentNode {
     pub signing_key: SigningKey,
     pub latest_log: Option<GovernmentRuleLog>,
+    pub previous_log: Option<GovernmentRuleLog>
 }
 
 impl GovernmentNode {
@@ -14,6 +15,7 @@ impl GovernmentNode {
         Self {
             signing_key,
             latest_log: None,
+            previous_log: None,
         }
     }
 
