@@ -3,6 +3,8 @@ use serde_big_array::BigArray;
 use std::collections::BTreeMap;
 use ed25519_dalek::VerifyingKey as PublicKey;
 
+use crate::crypto::VDFProof;
+
 
 pub type SIGNATURE = [u8; 64];
 pub type HASH = [u8; 32];
@@ -25,7 +27,7 @@ pub struct Resources {
 pub struct Plot {
     pub plot_id: String,
     pub crop: Option<String>,
-    pub planted_at_event_hash: Option<Vec<u8>>,
+    pub planted_at_event_hash: Option<HASH>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Actions {
@@ -38,6 +40,16 @@ pub enum Crops {
     Wheat,
     Corn,
     Rice,
+}
+
+impl Crops {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Crops::Wheat => "wheat",
+            Crops::Corn => "corn",
+            Crops::Rice => "rice"
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -63,7 +75,9 @@ pub struct Event {
     pub prev_event_hash: Option<HASH>,
     #[serde(with = "BigArray")]
     pub signature: SIGNATURE,      
-    pub timestamp_slot: u64,       
+    pub timestamp_slot: u64,
+    pub proof: Option<VDFProof>,   
+    pub sequence_number: u64,
 }
 
 
