@@ -13,4 +13,8 @@ serde = {version = "1.0.228", features = ["derive"]}
 serde-big-array = "0.5"
 vdf = "0.1.0"
 blake3 = "1.8.3"
+futures = "0.3.31"
+libp2p = { version = "0.53", features = ["tcp", "tokio", "noise", "yamux", "gossipsub", "request-response", "macros", "cbor"] }
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
+hex = "0.4.3"
 

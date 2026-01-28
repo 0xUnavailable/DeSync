@@ -21,50 +21,80 @@ impl GovernmentNode {
         }
     }
 
-    pub fn append_new_rule_log(
-        &mut self,
-        rules: BTreeMap<String, ActionRule>,
-        tasks: Vec<Task>,
-        tax_rate_percent: u8,
-        tax_deadline: u64,
-        effective_slot: u64,
-    ) -> Result<GovernmentRuleLog> {
-        let version_number = self.latest_log.as_ref()
-            .map(|log| log.version_number + 1)
-            .unwrap_or(1);
+pub fn generate_genesis_government_log(
+    realm_id: RealmId,
+    signing_key: &SigningKey,
+) -> Result<GovernmentRuleLog> {
+    let public_key = signing_key.verifying_key();
 
-        let previous_log_hash = self.latest_log.as_ref().map(|log| log.log_hash);
-        
-        let mut new_log = GovernmentRuleLog {
-            version_number,
-            effective_slot,
-            rules,
-            tasks,
-            tax_rate_percent,
-            tax_deadline,
-            previous_log_hash,
-            log_hash: [0; 32],
-            government_signature: [0; 64],
-            realm_id: self.realm_id,
-        };
-        
-        new_log.government_signature = [0; 64];
-        new_log.log_hash = [0; 32];
-        
-        let serialized_log = serialize(&new_log)?;
-        let hash_output = blake3::hash(&serialized_log);
-        let log_hash: HASH = *hash_output.as_bytes();
-        
-        let signature: Signature = self.signing_key.sign(&log_hash);
-        
-        new_log.log_hash = log_hash;
-        new_log.government_signature = signature.to_bytes();
-        
-        self.previous_log = self.latest_log.clone();
-        self.latest_log = Some(new_log.clone());
-        
-        Ok(new_log)
-    }
+    let mut log = GovernmentRuleLog {
+        realm_id,
+        version_number: 0,
+        effective_slot: 0,
+        rules: BTreeMap::new(),
+        tasks: Vec::new(),
+        tax_rate_percent: 0,
+        tax_deadline: 0,
+        previous_log_hash: None,
+        log_hash: [0; 32],
+        government_signature: [0; 64],
+        government_public_key: public_key,
+    };
+
+    let serialized = serialize(&log)?;
+    let hash = blake3::hash(&serialized);
+    log.log_hash = *hash.as_bytes();
+    log.government_signature = signing_key.sign(hash.as_bytes()).to_bytes();
+
+    Ok(log)
+}
+
+
+pub fn append_new_rule_log(
+    &mut self,
+    rules: BTreeMap<String, ActionRule>,
+    tasks: Vec<Task>,
+    tax_rate_percent: u8,
+    tax_deadline: u64,
+    effective_slot: u64,
+) -> Result<GovernmentRuleLog> {
+    let version_number = self.latest_log
+        .as_ref()
+        .map(|log| log.version_number + 1)
+        .unwrap_or(1);
+
+    let previous_log_hash = self.latest_log.as_ref().map(|log| log.log_hash);
+
+    let government_public_key = self.signing_key.verifying_key();
+
+    let mut new_log = GovernmentRuleLog {
+        version_number,
+        effective_slot,
+        rules,
+        tasks,
+        tax_rate_percent,
+        tax_deadline,
+        previous_log_hash,
+        log_hash: [0; 32],
+        government_signature: [0; 64],
+        government_public_key,
+        realm_id: self.realm_id,
+    };
+
+    let serialized_log = serialize(&new_log)?;
+    let hash_output = blake3::hash(&serialized_log);
+    let log_hash: HASH = *hash_output.as_bytes();
+
+    let signature: Signature = self.signing_key.sign(&log_hash);
+
+    new_log.log_hash = log_hash;
+    new_log.government_signature = signature.to_bytes();
+
+    self.previous_log = self.latest_log.clone();
+    self.latest_log = Some(new_log.clone());
+
+    Ok(new_log)
+}
     
     pub fn verify_rule_log(&self, log: &GovernmentRuleLog, pubkey_bytes: &[u8]) -> Result<bool> {
         let mut log_for_hash = log.clone();
