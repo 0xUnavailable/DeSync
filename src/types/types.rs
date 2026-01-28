@@ -8,19 +8,39 @@ use crate::crypto::VDFProof;
 
 pub type SIGNATURE = [u8; 64];
 pub type HASH = [u8; 32];
+pub type RealmId = [u8; 32];
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Copy)]
 pub struct ResourceDelta {
     pub wheat: i64,
     pub wood: i64,
     pub coins: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Copy)]
 pub struct Resources {
     pub wheat: u64,
     pub wood: u64,
     pub coins: u64,
+}
+
+    impl Resources {
+    pub fn checked_sub(&self, delta: ResourceDelta) -> Option<Self> {
+        let wheat = self.wheat.checked_add_signed(-delta.wheat)?;
+        let wood = self.wood.checked_add_signed(-delta.wood)?;
+        let coins = self.coins.checked_add_signed(-delta.coins)?;
+        
+        Some(Resources { wheat, wood, coins })
+    }
+
+    pub fn saturating_add(&self, delta: ResourceDelta) -> Self {
+        Resources {
+            wheat: self.wheat.saturating_add_signed(delta.wheat),
+            wood: self.wood.saturating_add_signed(delta.wood),
+            coins: self.coins.saturating_add_signed(delta.coins),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -78,6 +98,7 @@ pub struct Event {
     pub timestamp_slot: u64,
     pub proof: Option<VDFProof>,   
     pub sequence_number: u64,
+    pub realm_id: RealmId,
 }
 
 
@@ -94,6 +115,8 @@ pub struct UserState {
     pub prev_state_hash: Option<HASH>, 
     #[serde(with = "BigArray")]
     pub signature: SIGNATURE,
+    pub last_p2p_nonce: u64,
+
 }
 
 
@@ -113,9 +136,11 @@ pub struct GovernmentRuleLog {
     pub tasks: Vec<Task>,
     pub tax_rate_percent: u8, // e.g. 10 = 10%
     pub tax_deadline: u64,
+    pub previous_log_hash: Option<HASH>,
     pub log_hash: HASH, 
     #[serde(with = "BigArray")]         
     pub government_signature: SIGNATURE,
+    pub realm_id: RealmId,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -144,20 +169,25 @@ pub struct TaxReceipt {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct P2PTransferReceipt {
-    pub tx_id: String,
+    pub realm_id: RealmId,
+    pub tx_hash: HASH,
     pub sender: PublicKey,
     pub receiver: PublicKey,
-    pub delta: ResourceDelta,      
+    pub delta: ResourceDelta,
+    pub sender_prev_state_hash: HASH,
+    pub receiver_prev_state_hash: HASH,
     pub sender_balance_before: Resources,
     pub sender_balance_after: Resources,
     pub receiver_balance_before: Resources,
     pub receiver_balance_after: Resources,
-    pub prev_tx_hash: Option<HASH>,
+    pub nonce: u64,
     #[serde(with = "BigArray")]
     pub sender_signature: SIGNATURE,
     #[serde(with = "BigArray")]
     pub receiver_signature: SIGNATURE,
 }
+
+
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Snapshot {
@@ -198,6 +228,8 @@ mod tests {
             tax_deadline: 1000,
             log_hash: [0;32],
             government_signature:[0;64],
+            previous_log_hash: None,
+            realm_id: [0;32],
         };
 
         // 2. Create second instance with IDENTICAL data but REVERSED insertion order
@@ -222,6 +254,8 @@ mod tests {
             tax_deadline: 1000,
             log_hash:[0;32],
             government_signature:[0; 64],
+            previous_log_hash: None,
+            realm_id: [0;32],
         };
 
         // 3. Serialize both

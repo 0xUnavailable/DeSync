@@ -103,6 +103,8 @@ mod tax_tests {
             tax_deadline: 100,
             log_hash: [0; 32],
             government_signature: [0; 64],
+            previous_log_hash: None,
+            realm_id: [0;32],
         };
 
         let mut unsigned_log = log.clone();
@@ -119,6 +121,7 @@ mod tax_tests {
     ) -> GovernmentNode {
         let mut rng = OsRng;
         GovernmentNode {
+            realm_id: [0;32],
             signing_key: SigningKey::generate(&mut rng),
             latest_log: Some(current_log),
             previous_log,

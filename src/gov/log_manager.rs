@@ -1,18 +1,20 @@
-use crate::{types::{ActionRule, GovernmentRuleLog, HASH, Task}, utils::serialize};
+use crate::{types::{ActionRule, GovernmentRuleLog, HASH, RealmId, Task}, utils::serialize};
 use ed25519_dalek::{SigningKey, Verifier, VerifyingKey, Signature, Signer};
 use std::collections::BTreeMap;
 use anyhow::{Result, anyhow};
 
 #[derive(Debug)]
 pub struct GovernmentNode {
+    pub realm_id: RealmId,
     pub signing_key: SigningKey,
     pub latest_log: Option<GovernmentRuleLog>,
     pub previous_log: Option<GovernmentRuleLog>
 }
 
 impl GovernmentNode {
-    pub fn new(signing_key: SigningKey) -> Self {
+    pub fn new(realm_id: RealmId, signing_key: SigningKey) -> Self {
         Self {
+            realm_id,
             signing_key,
             latest_log: None,
             previous_log: None,
@@ -31,6 +33,8 @@ impl GovernmentNode {
             .map(|log| log.version_number + 1)
             .unwrap_or(1);
 
+        let previous_log_hash = self.latest_log.as_ref().map(|log| log.log_hash);
+        
         let mut new_log = GovernmentRuleLog {
             version_number,
             effective_slot,
@@ -38,22 +42,30 @@ impl GovernmentNode {
             tasks,
             tax_rate_percent,
             tax_deadline,
+            previous_log_hash,
             log_hash: [0; 32],
             government_signature: [0; 64],
+            realm_id: self.realm_id,
         };
-
+        
+        new_log.government_signature = [0; 64];
+        new_log.log_hash = [0; 32];
+        
         let serialized_log = serialize(&new_log)?;
         let hash_output = blake3::hash(&serialized_log);
         let log_hash: HASH = *hash_output.as_bytes();
-
+        
         let signature: Signature = self.signing_key.sign(&log_hash);
+        
         new_log.log_hash = log_hash;
         new_log.government_signature = signature.to_bytes();
-
+        
+        self.previous_log = self.latest_log.clone();
         self.latest_log = Some(new_log.clone());
+        
         Ok(new_log)
     }
-
+    
     pub fn verify_rule_log(&self, log: &GovernmentRuleLog, pubkey_bytes: &[u8]) -> Result<bool> {
         let mut log_for_hash = log.clone();
         log_for_hash.log_hash = [0; 32];
@@ -66,8 +78,9 @@ impl GovernmentNode {
             println!("Verification Failed: Data hash mismatch.");
             return Ok(false);
         }
+        
         let public_key = VerifyingKey::from_bytes(pubkey_bytes.try_into()?)
-        .map_err(|_| anyhow!("Invalid Public Key format"))?;
+            .map_err(|_| anyhow!("Invalid Public Key format"))?;
         let sig = Signature::from_bytes(&log.government_signature);
         
         match public_key.verify(&log.log_hash, &sig) {
@@ -77,6 +90,32 @@ impl GovernmentNode {
                 Ok(false)
             }
         }
+    }
+    
+    pub fn verify_log_chain(&self, log: &GovernmentRuleLog) -> Result<bool> {
+        if let Some(prev_hash) = &log.previous_log_hash {
+            if let Some(prev_log) = &self.previous_log {
+                if &prev_log.log_hash != prev_hash {
+                    println!("Verification Failed: Log chain broken - previous hash mismatch.");
+                    return Ok(false);
+                }
+            } else {
+                println!("Verification Failed: Log references previous hash but no previous log exists.");
+                return Ok(false);
+            }
+        }
+        
+        if let Some(prev_log) = &self.previous_log {
+            if log.version_number != prev_log.version_number + 1 {
+                println!("Verification Failed: Version number not sequential.");
+                return Ok(false);
+            }
+        } else if log.version_number != 1 {
+            println!("Verification Failed: Genesis log must have version 1.");
+            return Ok(false);
+        }
+        
+        Ok(true)
     }
 
     pub fn latest(&self) -> Option<GovernmentRuleLog> {
@@ -92,7 +131,7 @@ mod tests {
 
     fn setup_gov_node() -> (GovernmentNode, SigningKey) {
         let signing_key = SigningKey::generate(&mut OsRng);
-        (GovernmentNode::new(signing_key.clone()), signing_key)
+        (GovernmentNode::new([0;32],signing_key.clone()), signing_key)
     }
 
     #[test]
