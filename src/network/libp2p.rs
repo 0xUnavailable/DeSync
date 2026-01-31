@@ -71,7 +71,7 @@ pub struct RealmBehaviour {
     pub request_response: request_response::cbor::Behaviour<DirectRequest, DirectResponse>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PeerState {
     pub last_seen: std::time::SystemTime,
     pub realm_id: Option<RealmId>,
@@ -80,6 +80,7 @@ pub struct PeerState {
     pub handshake_complete: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NodeState {
     pub latest_gov_log_version: u64,
     pub seen_messages: HashSet<HASH>,
@@ -89,6 +90,21 @@ pub struct NodeState {
     pub chat_messages: Vec<ChatMessage>,
     pub government_key_locked: bool,
     pub has_synced_government: bool,
+}
+
+impl Default for NodeState {
+    fn default() -> Self {
+        Self {
+            latest_gov_log_version: 0,
+            seen_messages: HashSet::new(),
+            peer_states: Default::default(),
+            pending_tax_obligations: Vec::new(),
+            latest_government_log: None,
+            chat_messages: Vec::new(),
+            government_key_locked: false,
+            has_synced_government: false,
+        }
+    }
 }
 
 pub struct P2PNode {
