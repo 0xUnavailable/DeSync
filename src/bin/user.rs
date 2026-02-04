@@ -326,6 +326,10 @@ async fn run_user(data_dir: &str, listen_addr: &str, dial_addr: Option<&str>) ->
     
     println!("\nWaiting for connections...\n");
     
+    // FIX #6: Create interval timer to check for pending objects to broadcast
+    let mut broadcast_interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+    broadcast_interval.tick().await; // First tick completes immediately
+    
     // Event loop
     loop {
         tokio::select! {
@@ -334,6 +338,13 @@ async fn run_user(data_dir: &str, listen_addr: &str, dial_addr: Option<&str>) ->
                     if let Err(e) = handle_user_event(&mut node, event).await {
                         eprintln!("Error handling event: {}", e);
                     }
+                }
+            }
+            
+            // FIX #6: Periodically check for pending objects to broadcast
+            _ = broadcast_interval.tick() => {
+                if let Err(e) = broadcast_pending_objects(&mut node) {
+                    eprintln!("[PUSH] Error broadcasting pending objects: {}", e);
                 }
             }
         }
@@ -474,7 +485,15 @@ async fn handle_user_event(
                                 RealmResponse::LogsChunk(logs) => {
                                     println!("[SYNC] Received logs chunk with {} entries", logs.len());
                                     match node.handle_logs_chunk(logs) {
-                                        Ok(_) => println!("[SYNC] Logs chunk applied successfully"),
+                                        Ok(_) => {
+                                            println!("[SYNC] Logs chunk applied successfully");
+                                            
+                                            // FIX #6: Broadcast pending objects after successful sync
+                                            // This ensures obligations created before the node started get sent
+                                            if let Err(e) = broadcast_pending_objects(node) {
+                                                eprintln!("[PUSH] Error broadcasting pending objects after sync: {}", e);
+                                            }
+                                        }
                                         Err(e) => eprintln!("[ERROR] Failed to process logs chunk: {}", e),
                                     }
                                 }
