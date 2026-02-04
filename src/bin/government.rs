@@ -251,6 +251,10 @@ async fn run_government(keys_dir: &str, listen_addr: &str) -> Result<()> {
                 
                 println!("[OK] Genesis log applied to state");
                 println!("  Current state version: {}", node.state.latest_gov_log_version);
+                println!("  Latest gov log present: {}", node.state.latest_government_log.is_some());
+                if let Some(ref log) = node.state.latest_government_log {
+                    println!("  Latest gov log hash: {}", hex::encode(log.log_hash));
+                }
                 
                 // Index the genesis log
                 node.log_index.index_log(genesis_log.version_number, *genesis_hash.as_bytes());
@@ -266,6 +270,15 @@ async fn run_government(keys_dir: &str, listen_addr: &str) -> Result<()> {
     
     println!("\n[OK] Government node running");
     println!("  Listening on: {}", listen_addr);
+    
+    // DEBUG: Verify state before entering event loop
+    println!("[DEBUG] State verification before event loop:");
+    println!("  Latest gov log version: {}", node.state.latest_gov_log_version);
+    println!("  Latest gov log present: {}", node.state.latest_government_log.is_some());
+    if let Some(ref log) = node.state.latest_government_log {
+        println!("  Latest gov log hash: {}", hex::encode(log.log_hash));
+    }
+    
     println!("\nWaiting for connections...\n");
     
     // Event loop
@@ -273,7 +286,8 @@ async fn run_government(keys_dir: &str, listen_addr: &str) -> Result<()> {
         tokio::select! {
             event = node.swarm.next() => {
                 if let Some(event) = event {
-                    if let Err(e) = handle_government_event(&mut node, event).await {
+                    // FIX #7: Pass signing_key to event handler for receipt generation
+                    if let Err(e) = handle_government_event(&mut node, &signing_key, event).await {
                         eprintln!("Error handling event: {}", e);
                     }
                 }
@@ -282,8 +296,83 @@ async fn run_government(keys_dir: &str, listen_addr: &str) -> Result<()> {
     }
 }
 
+/// FIX #7: Helper function to process obligation and send receipt back to user
+fn process_obligation_and_send_receipt(
+    signing_key: &SigningKey,
+    obligation: &realm::types::TaxObligation,
+    obligation_hash: &realm::types::HASH,
+    node: &mut P2PNode,
+    peer: libp2p::PeerId,
+) -> Result<()> {
+    use realm::types::{TaxReceipt, TaxReceiptEnvelope, RealmObject};
+    
+    println!("[RECEIPT] Processing obligation from user {}", hex::encode(obligation.user_id.to_bytes()));
+    println!("  Obligation hash: {}", hex::encode(obligation.obligation_hash));
+    println!("  Coin amount: {}", obligation.coin_amount);
+    
+    // DEBUG: Check state before creating GovernmentNode
+    println!("[DEBUG] Node state before processing:");
+    println!("  Latest gov log version: {}", node.state.latest_gov_log_version);
+    println!("  Latest gov log present: {}", node.state.latest_government_log.is_some());
+    println!("  Previous gov log present: {}", node.state.previous_government_log.is_some());
+    
+    // FIX #7a: Ensure we have a government log before creating GovernmentNode
+    let latest_log = node.state.latest_government_log.clone()
+        .ok_or_else(|| anyhow::anyhow!("No government log available in state"))?;
+    
+    println!("[DEBUG] Creating GovernmentNode with latest log: {}", hex::encode(latest_log.log_hash));
+    
+    // Create a GovernmentNode with the logs properly set
+    let mut gov_node = GovernmentNode::new(signing_key.clone());
+    gov_node.latest_log = Some(latest_log);
+    gov_node.previous_log = node.state.previous_government_log.clone();
+    
+    println!("[DEBUG] GovernmentNode created, signing receipt...");
+    
+    // Sign the receipt
+    let receipt = sign_tax_receipt(
+        &gov_node,
+        obligation,
+        None,  // No previous receipt hash
+        1,     // Payment slot
+    )?;
+    
+    println!("[RECEIPT] Signed receipt:");
+    println!("  Coins transferred: {}", receipt.coins_transferred);
+    
+    // Create receipt envelope
+    let receipt_bytes = serde_json::to_vec(&receipt)?;
+    let receipt_sig = signing_key.sign(&receipt_bytes);
+    
+    let receipt_envelope = TaxReceiptEnvelope {
+        receipt: receipt.clone(),
+        signature: receipt_sig.to_bytes(),
+    };
+    
+    // Store receipt in object store
+    let receipt_obj = RealmObject::TaxReceiptEnvelope(receipt_envelope.clone());
+    let receipt_obj_bytes = serde_json::to_vec(&receipt_obj)?;
+    let receipt_hash = blake3::hash(&receipt_obj_bytes);
+    
+    node.object_store.store_object(receipt_hash.as_bytes(), &receipt_obj_bytes)?;
+    println!("[RECEIPT] Receipt stored in object store: {}", hex::encode(receipt_hash.as_bytes()));
+    
+    // Send receipt back to user
+    node.push_object(peer, receipt_obj_bytes);
+    println!("[RECEIPT] Receipt sent to user {}", peer);
+    
+    // FIX #7b: Delete the obligation from government's object store after receipt is sent
+    match node.object_store.delete(obligation_hash) {
+        Ok(_) => println!("[CLEANUP] Obligation removed from government storage"),
+        Err(e) => eprintln!("[WARN] Failed to delete obligation: {}", e),
+    }
+    
+    Ok(())
+}
+
 async fn handle_government_event(
     node: &mut P2PNode,
+    signing_key: &SigningKey,
     event: libp2p::swarm::SwarmEvent<realm::network::libp2p::RealmBehaviourEvent>,
 ) -> Result<()> {
     use libp2p::swarm::SwarmEvent;
@@ -367,6 +456,40 @@ async fn handle_government_event(
                                             RealmObject::GovernmentRuleLog(_) => {
                                                 println!("[SECURITY] Rejected government log from user {}", peer);
                                                 RealmResponse::Error("Users cannot create government logs".to_string())
+                                            }
+                                            RealmObject::TaxObligationEnvelope(ref env) => {
+                                                // FIX #7: Process obligation and generate receipt immediately
+                                                
+                                                // Calculate the obligation object hash for cleanup
+                                                let obligation_obj_hash = *blake3::hash(&bytes).as_bytes();
+                                                
+                                                match node.handle_received_object(bytes.clone()) {
+                                                    Ok(_) => {
+                                                        println!("[PUSH] Tax obligation accepted and stored");
+                                                        
+                                                        // Generate and send receipt automatically
+                                                        match process_obligation_and_send_receipt(
+                                                            &signing_key, 
+                                                            &env.obligation,
+                                                            &obligation_obj_hash,
+                                                            node, 
+                                                            peer
+                                                        ) {
+                                                            Ok(_) => {
+                                                                println!("[RECEIPT] Generated and sent receipt to user");
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!("[ERROR] Failed to generate receipt: {}", e);
+                                                            }
+                                                        }
+                                                        
+                                                        RealmResponse::PushAck
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("[ERROR] Failed to process pushed obligation: {}", e);
+                                                        RealmResponse::Error(format!("Invalid obligation: {}", e))
+                                                    }
+                                                }
                                             }
                                             _ => {
                                                 match node.handle_received_object(bytes) {

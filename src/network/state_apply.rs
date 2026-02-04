@@ -32,8 +32,9 @@ fn apply_government_log(
     log: crate::types::GovernmentRuleLog,
     state: &mut NodeState,
 ) -> Result<()> {
-    // Validate ordering - new log must be newer than current
-    if log.version_number <= state.latest_gov_log_version {
+    // Validate ordering - new log must be newer than current IF we have a current log
+    // This allows genesis (version 0) to be applied when state is empty
+    if state.latest_government_log.is_some() && log.version_number <= state.latest_gov_log_version {
         // Ignore old or duplicate logs
         return Ok(());
     }

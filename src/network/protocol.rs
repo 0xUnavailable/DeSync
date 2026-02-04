@@ -69,8 +69,8 @@ pub fn validate_message(
         // Hello is always allowed as first message
         (_, _, Hello(_)) => true,
         
-        // Government → User: Only GetHead, GetObject allowed (for verification)
-        (Government, User, GetHead | GetObject(_)) => true,
+        // Government → User: GetHead, GetObject for verification, PushObject for receipts
+        (Government, User, GetHead | GetObject(_) | PushObject(_)) => true,
         
         // User → Government: GetHead, GetObject, LogRequest, PushObject allowed
         (User, Government, GetHead | GetObject(_) | LogRequest { .. } | PushObject(_)) => true,

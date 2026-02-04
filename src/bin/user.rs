@@ -635,23 +635,25 @@ fn submit_obligation(data_dir: &str, amount: u64) -> Result<()> {
     let object_store = ObjectStore::new("./objects")?;
     let objects = object_store.list_all()?;
     
-    let mut gov_log_hash: Option<HASH> = None;
+    let mut gov_log_ref: Option<GovernmentLogRef> = None;
     for hash in objects {
         if let Some(bytes) = object_store.get_object(&hash)? {
-            if let Ok(RealmObject::GovernmentRuleLog(_)) = serde_json::from_slice(&bytes) {
-                gov_log_hash = Some(hash);
+            if let Ok(RealmObject::GovernmentRuleLog(log)) = serde_json::from_slice(&bytes) {
+                // Use the log's internal log_hash, NOT the object store hash
+                gov_log_ref = Some(GovernmentLogRef {
+                    realm_id,
+                    log_hash: log.log_hash,
+                });
+                println!("[DEBUG] Found government log:");
+                println!("  Object hash:     {}", hex::encode(hash));
+                println!("  Log hash (used): {}", hex::encode(log.log_hash));
+                println!("  Version:         {}", log.version_number);
                 break;
             }
         }
     }
     
-    let log_hash = gov_log_hash.ok_or_else(|| anyhow::anyhow!("No government log found. Connect to government first."))?;
-    
-    // Create obligation
-    let gov_log_ref = GovernmentLogRef {
-        realm_id,
-        log_hash,
-    };
+    let gov_log_ref = gov_log_ref.ok_or_else(|| anyhow::anyhow!("No government log found. Connect to government first."))?;
     
     let mut obligation = TaxObligation {
         user_id: signing_key.verifying_key(),
@@ -661,12 +663,19 @@ fn submit_obligation(data_dir: &str, amount: u64) -> Result<()> {
         user_signature: [0; 64],
     };
     
-    // Compute hash
+    // Compute hash using CBOR serialization (must match government's validation)
     let mut unsigned = obligation.clone();
     unsigned.user_signature = [0; 64];
     unsigned.obligation_hash = [0; 32];
-    let hash_bytes = serde_json::to_vec(&unsigned)?;
+    
+    // Use CBOR serialization, not JSON
+    let mut hash_bytes = Vec::new();
+    ciborium::into_writer(&unsigned, &mut hash_bytes)?;
     obligation.obligation_hash = *blake3::hash(&hash_bytes).as_bytes();
+    
+    println!("[DEBUG] Obligation hash computation:");
+    println!("  Serialization: CBOR (ciborium)");
+    println!("  Hash: {}", hex::encode(obligation.obligation_hash));
     
     // Sign
     let sig = signing_key.sign(&obligation.obligation_hash);
