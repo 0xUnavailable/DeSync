@@ -1,21 +1,33 @@
 [package]
-name = "desync"
+name = "realm"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+default-run = "realm"
 
 [dependencies]
-anyhow = "1.0.100"
-ciborium = "0.2.2"
-ed25519-dalek = { version = "2.2", features = ["rand_core","serde"] }
-rand_core = { version = "0.6.4", features = ["getrandom"] }
-rand = "0.8.5"
-serde = {version = "1.0.228", features = ["derive"]}
+anyhow = "1.0"
+blake3 = "1.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
+hex = "0.4"
+libp2p = { version = "0.53", features = ["tcp", "noise", "yamux", "request-response", "macros", "async-std"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 serde-big-array = "0.5"
-vdf = "0.1.0"
-blake3 = "1.8.3"
-futures = "0.3.31"
-libp2p = { version = "0.53", features = ["tcp", "tokio", "noise", "yamux", "gossipsub", "request-response", "macros", "cbor", "serde"] }
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
-hex = "0.4.3"
-postcard = {version = "1.1.3", features = ["alloc"]}
+tokio = { version = "1.35", features = ["full"] }
+async-std = { version = "1.12", features = ["attributes"] }
+futures = "0.3"
+clap = { version = "4.4", features = ["derive"] }
+rand = "0.8"
+async-trait = "0.1"
+env_logger = "0.11"
+log = "0.4"
+ciborium = "0.2"
+tempfile = "3.24.0"
 
+[[bin]]
+name = "government"
+path = "src/bin/government.rs"
+
+[[bin]]
+name = "user"
+path = "src/bin/user.rs"
