@@ -53,6 +53,7 @@ pub struct GovernmentRuleLog {
     pub realm_id: HASH,
     pub previous_log_hash: HASH,
     pub state_rules: Vec<ActionRule>,
+    pub tax_amount: u64,  // NEW: Tax amount for this version
     pub log_hash: HASH,
     #[serde(with = "BigArray")]
     pub government_signature: [u8; 64],

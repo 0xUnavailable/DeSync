@@ -73,6 +73,18 @@ pub fn recover_state() -> Result<NodeState> {
                 // Chat messages are no longer part of core state
                 // Ignore for now - can be handled separately if needed
             }
+
+            PersistentRecord::TaskStarted(_) => {
+                // Task started events are logged for audit purposes
+                // They don't affect the network state reconstruction
+                // User state is managed separately in user_state.json
+            }
+
+            PersistentRecord::TaskHarvested(_) => {
+                // Task harvested events are logged for audit purposes
+                // They don't affect the network state reconstruction
+                // User state is managed separately in user_state.json
+            }
         }
     }
 

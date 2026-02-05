@@ -1,43 +1,68 @@
-// VDF module commented out - not required for v0
-// Uncomment and add vdf crate to Cargo.toml when needed
+// Simple VDF implementation using iterative hashing
+// This provides proof-of-sequential-work without external dependencies
 
-/*
-use vdf::{VDFParams, WesolowskiVDFParams, VDF};
 use serde::{Serialize, Deserialize};
-use std::panic;
+use blake3;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct VDFProof {
     pub challenge: Vec<u8>,
-    pub difficulty: u64,
-    pub solution: Vec<u8>,
+    pub iterations: u64,
+    pub result: [u8; 32],
 }
 
 impl VDFProof {
-    pub fn compute(challenge: &[u8], difficulty: u64) -> Self {
-        let vdf_instance = WesolowskiVDFParams(2048).new();
-        let solution = vdf_instance.solve(challenge, difficulty)
-        .expect("VDF computation failed");
+    /// Compute VDF by performing sequential hash iterations
+    /// This simulates actual work and cannot be parallelized
+    pub fn compute(challenge: &[u8], iterations: u64) -> Self {
+        let mut current = blake3::hash(challenge);
+        
+        for _ in 0..iterations {
+            current = blake3::hash(current.as_bytes());
+        }
+        
         Self {
             challenge: challenge.to_vec(),
-            difficulty,
-            solution,
+            iterations,
+            result: *current.as_bytes(),
         }
     }
     
+    /// Verify VDF by re-computing the sequential hashing
     pub fn verify(&self) -> bool {
-        let vdf_instance = WesolowskiVDFParams(2048).new();
+        let mut current = blake3::hash(&self.challenge);
         
-        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            vdf_instance.verify(&self.challenge, self.difficulty, &self.solution)
-        }));
-        
-        match result {
-            Ok(Ok(())) => true,
-            Ok(Err(_)) => false,
-            Err(_) => false,
+        for _ in 0..self.iterations {
+            current = blake3::hash(current.as_bytes());
         }
+        
+        *current.as_bytes() == self.result
     }
 }
-*/
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_vdf_compute_and_verify() {
+        let challenge = b"test_challenge";
+        let proof = VDFProof::compute(challenge, 1000);
+        
+        assert_eq!(proof.challenge, challenge);
+        assert_eq!(proof.iterations, 1000);
+        assert!(proof.verify());
+    }
+    
+    #[test]
+    fn test_vdf_invalid_proof() {
+        let challenge = b"test_challenge";
+        let mut proof = VDFProof::compute(challenge, 1000);
+        
+        // Tamper with result
+        proof.result[0] ^= 1;
+        
+        assert!(!proof.verify());
+    }
+}
 

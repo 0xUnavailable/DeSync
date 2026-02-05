@@ -1,8 +1,7 @@
-
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
-use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, Write};
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
 use crate::types::{
@@ -10,6 +9,7 @@ use crate::types::{
     ReceiptEnvelope, ChatMessageEnvelope,
 };
 use crate::network::libp2p::NodeState;
+use crate::utils::file_protection::ProtectedFile;
 
 const SNAPSHOT_PATH: &str = "node-snapshot.json";
 const EVENT_LOG_PATH: &str = "node-events.jsonl";
@@ -21,6 +21,25 @@ pub enum PersistentRecord {
     TaxReceipt(TaxReceiptEnvelope),
     P2PReceipt(ReceiptEnvelope),
     ChatMessage(ChatMessageEnvelope),
+    TaskStarted(TaskStartedEvent),
+    TaskHarvested(TaskHarvestedEvent),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TaskStartedEvent {
+    pub task_name: String,
+    pub start_time: u64,
+    pub duration: u64,
+    pub resources_locked: crate::types::Resources,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TaskHarvestedEvent {
+    pub task_name: String,
+    pub completed_at: u64,
+    pub coins_earned: u64,
+    pub vdf_iterations: u64,
+    pub vdf_compute_time_ms: u64,
 }
 
 pub fn save_snapshot(state: &NodeState) -> Result<()> {
@@ -42,30 +61,23 @@ pub fn load_snapshot() -> Result<Option<NodeState>> {
 }
 
 pub fn append_event(record: &PersistentRecord) -> Result<()> {
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(EVENT_LOG_PATH)?;
-    
+    let protected = ProtectedFile::new(EVENT_LOG_PATH);
     let json = serde_json::to_string(record)?;
-    writeln!(file, "{}", json)?;
-    
+    protected.append_line(&json)?;
     Ok(())
 }
 
 pub fn load_events() -> Result<Vec<PersistentRecord>> {
-    if !Path::new(EVENT_LOG_PATH).exists() {
+    let protected = ProtectedFile::new(EVENT_LOG_PATH);
+    
+    if !protected.exists() {
         return Ok(Vec::new());
     }
     
-    let file = File::open(EVENT_LOG_PATH)?;
-    let reader = BufReader::new(file);
-    
-    use std::io::BufRead;
+    let lines = protected.read_lines()?;
     let mut records = Vec::new();
     
-    for line in reader.lines() {
-        let line = line?;
+    for line in lines {
         if !line.is_empty() {
             let record: PersistentRecord = serde_json::from_str(&line)?;
             records.push(record);

@@ -50,6 +50,7 @@ impl GovernmentNode {
             realm_id,
             previous_log_hash: [0; 32],
             state_rules: default_rules,
+            tax_amount: 100,  // Default tax amount
             log_hash: [0; 32],
             government_signature: [0; 64],
         };
@@ -61,7 +62,7 @@ impl GovernmentNode {
         Ok(log)
     }
     
-    pub fn append_log(&mut self, new_rules: Vec<ActionRule>) -> Result<GovernmentRuleLog> {
+    pub fn append_log(&mut self, new_rules: Vec<ActionRule>, tax_amount: u64) -> Result<GovernmentRuleLog> {
         let current_log = self.latest_log
             .as_ref()
             .ok_or_else(|| anyhow!("No current log to append to"))?;
@@ -74,6 +75,7 @@ impl GovernmentNode {
             realm_id: current_log.realm_id,
             previous_log_hash: previous_hash,
             state_rules: new_rules,
+            tax_amount,
             log_hash: [0; 32],
             government_signature: [0; 64],
         };
@@ -86,6 +88,37 @@ impl GovernmentNode {
         self.latest_log = Some(new_log.clone());
         
         Ok(new_log)
+    }
+    
+    /// Create a successor log with new rules and/or tax amount (standalone function)
+    pub fn create_successor_log(
+        previous_log: &GovernmentRuleLog,
+        new_rules: Vec<ActionRule>,
+        new_tax_amount: u64,
+        signing_key: &SigningKey,
+    ) -> Result<GovernmentRuleLog> {
+        let new_version = previous_log.version_number + 1;
+        
+        // Create log without signature first
+        let mut log = GovernmentRuleLog {
+            version_number: new_version,
+            realm_id: previous_log.realm_id,
+            previous_log_hash: previous_log.log_hash,
+            state_rules: new_rules,
+            tax_amount: new_tax_amount,
+            log_hash: [0u8; 32],
+            government_signature: [0u8; 64],
+        };
+        
+        // Compute hash
+        let log_bytes = serialize(&log)?;
+        log.log_hash = *blake3::hash(&log_bytes).as_bytes();
+        
+        // Sign the hash
+        let signature = signing_key.sign(&log.log_hash);
+        log.government_signature = signature.to_bytes();
+        
+        Ok(log)
     }
     
     pub fn verify_log_chain(&self, log: &GovernmentRuleLog) -> Result<()> {

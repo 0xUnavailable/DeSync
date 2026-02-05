@@ -18,7 +18,7 @@ use crate::types::{
 };
 use crate::network::protocol::{RealmRequest, RealmResponse, NodeHead, validate_message};
 use crate::network::PeerInfo;
-use crate::storage::ObjectStore;
+use crate::storage::OrganizedObjectStore;
 
 //
 // - - -- - -- - -- - -- - -- Codec - - -- - -- - -- - -- - --
@@ -198,12 +198,13 @@ pub struct NetworkConfig {
     pub government_public_key: Option<VerifyingKey>,
     pub is_government: bool,
     pub node_role: NodeRole,
+    pub data_dir: Option<String>,  // Path to user data directory (for updating UserStateManager)
 }
 
 pub struct P2PNode {
     pub swarm: Swarm<RealmBehaviour>,
     pub state: NodeState,
-    pub object_store: ObjectStore,
+    pub object_store: OrganizedObjectStore,
     pub config: NetworkConfig,
     pub peer_heads: HashMap<PeerId, NodeHead>,
     pub peer_info: HashMap<PeerId, PeerInfo>,
@@ -237,8 +238,11 @@ impl P2PNode {
         let mut state = NodeState::default();
         state.realm_id = config.realm_id;
 
-        let object_store = ObjectStore::new("./objects")?;
-        
+        let object_store = if config.is_government {
+            OrganizedObjectStore::new_government("./objects")?
+        } else {
+            OrganizedObjectStore::new("./objects")?
+        };
         // Build log index from existing objects
         let log_index = match crate::storage::build_index_from_store(&object_store) {
             Ok(idx) => {
@@ -351,33 +355,33 @@ impl P2PNode {
     }
 
     /// Validate inbound message
-    fn validate_inbound_message(&self, peer: PeerId, request: &RealmRequest) -> bool {
-        // Hello messages don't need prior handshake
-        if matches!(request, RealmRequest::Hello(_)) {
-            return true;
-        }
+    // fn validate_inbound_message(&self, peer: PeerId, request: &RealmRequest) -> bool {
+    //     // Hello messages don't need prior handshake
+    //     if matches!(request, RealmRequest::Hello(_)) {
+    //         return true;
+    //     }
 
-        let peer_info = match self.peer_info.get(&peer) {
-            Some(info) => info,
-            None => {
-                log::warn!("[SECURITY] Received message from peer {} before handshake complete", peer);
-                return false;
-            }
-        };
+    //     let peer_info = match self.peer_info.get(&peer) {
+    //         Some(info) => info,
+    //         None => {
+    //             log::warn!("[SECURITY] Received message from peer {} before handshake complete", peer);
+    //             return false;
+    //         }
+    //     };
 
-        let valid = validate_message(peer_info.role, self.config.node_role, request);
+    //     let valid = validate_message(peer_info.role, self.config.node_role, request);
         
-        if !valid {
-            log::warn!(
-                "[SECURITY] Blocked inbound message: {} → {} sent {:?}",
-                peer_info.role.as_str(),
-                self.config.node_role.as_str(),
-                request
-            );
-        }
+    //     if !valid {
+    //         log::warn!(
+    //             "[SECURITY] Blocked inbound message: {} → {} sent {:?}",
+    //             peer_info.role.as_str(),
+    //             self.config.node_role.as_str(),
+    //             request
+    //         );
+    //     }
         
-        valid
-    }
+    //     valid
+    // }
 
     pub fn should_request_from_peer(&self, _peer: PeerId) -> bool {
         // If we are government, we should never request objects from users
@@ -527,7 +531,8 @@ impl P2PNode {
         // If we have no state (version 0, zero hash) and peer has anything, request from version 0
         if local_head.gov_log_version == 0 
             && local_head.gov_log_hash == [0u8; 32]
-            && peer_head.gov_log_version >= 0 {
+            //&& peer_head.gov_log_version >= 0 
+            {
             log::info!(
                 "[SYNC] First-time sync detected (no local state), requesting logs from version 0"
             );
@@ -591,7 +596,7 @@ impl P2PNode {
                 log.version_number, hex::encode(&hash[..8]));
         }
         
-        apply_object_to_state(object, &mut self.state)?;
+        apply_object_to_state(object, &mut self.state, &self.config)?;
         
         Ok(())
     }
@@ -674,7 +679,7 @@ impl P2PNode {
             }
             
             // Apply to state
-            apply_object_to_state(object, &mut self.state)?;
+            apply_object_to_state(object, &mut self.state, &self.config)?;
         }
         
         log::info!(

@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::types::{HASH, RealmObject};
 use crate::network::protocol::NodeHead;
-use crate::storage::ObjectStore;
+use crate::storage::OrganizedObjectStore;
 
 /// Reconciliation result - objects that need to be requested
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ impl ReconciliationPlan {
 pub fn reconcile_heads(
     local: &NodeHead,
     peer: &NodeHead,
-    object_store: &ObjectStore,
+    object_store: &OrganizedObjectStore,
 ) -> ReconciliationPlan {
     let mut plan = ReconciliationPlan::new();
     
@@ -68,7 +68,7 @@ if (peer.gov_log_version == 0 && local_has_no_logs)
 pub fn ingest_object(
     object_bytes: &[u8],
     gov_key: &ed25519_dalek::VerifyingKey,
-    object_store: &ObjectStore,
+    object_store: &OrganizedObjectStore,
 ) -> Result<HASH> {
     // Deserialize object
     let object: RealmObject = serde_json::from_slice(object_bytes)
@@ -103,7 +103,7 @@ pub fn ingest_object(
 pub fn build_logs_chunk(
     start_version: u64,
     max_entries: usize,
-    object_store: &ObjectStore,
+    object_store: &OrganizedObjectStore,
     log_index: &crate::storage::LogVersionIndex,
 ) -> Result<Vec<RealmObject>> {
     let end_version = start_version.saturating_add(max_entries as u64).saturating_sub(1);

@@ -5,10 +5,10 @@ use std::fs;
 use std::path::Path;
 
 use realm::types::{
-    HASH, RealmObject, TaxObligation, TaxObligationEnvelope,
+    RealmObject, TaxObligation, TaxObligationEnvelope,
     GovernmentLogRef, ActionRule, P2PTransferReceipt, ReceiptEnvelope,
 };
-use realm::storage::ObjectStore;
+use realm::storage::{ObjectStore, OrganizedObjectStore};
 use realm::network::libp2p::{P2PNode, NetworkConfig};
 use realm::user::state_manager::UserStateManager;
 use libp2p::Multiaddr;
@@ -54,16 +54,6 @@ enum Commands {
         dial: Option<String>,
     },
     
-    /// Connect to a peer
-    Connect {
-        /// Peer multiaddr
-        peer: String,
-        
-        /// Path to user data
-        #[arg(long, default_value = "user_data")]
-        data_dir: String,
-    },
-    
     /// Start a task
     StartTask {
         /// Task name (e.g., "farming", "mining")
@@ -86,8 +76,8 @@ enum Commands {
     
     /// Create obligation and submit to government
     SubmitObligation {
-        /// Amount in coins
-        amount: u64,
+        /// Amount in coins (optional, defaults to current government tax_amount)
+        amount: Option<u64>,
         
         /// Path to user data
         #[arg(long, default_value = "user_data")]
@@ -130,12 +120,6 @@ fn main() -> Result<()> {
             tokio::runtime::Runtime::new()?.block_on(async {
                 run_user(&data_dir, &listen, dial.as_deref()).await
             })?;
-        }
-        
-        Commands::Connect { peer, data_dir: _ } => {
-            println!("Connect to peer: {}", peer);
-            println!("This should be run with the 'run' command in a future update");
-            println!("Use: user run --data-dir <dir> --dial {}", peer);
         }
         
         Commands::StartTask { name, data_dir } => {
@@ -196,11 +180,10 @@ fn init_user(realm_id_hex: &str, gov_key_hex: &str, data_dir: &str) -> Result<()
     println!("  Gov key: {}", gov_key_hex);
     
     // Initialize user state manager
+    use realm::utils::file_protection::ProtectedFile;
     let user_state = UserStateManager::new();
-    fs::write(
-        Path::new(data_dir).join("user_state.json"),
-        serde_json::to_string_pretty(&user_state)?,
-    )?;
+    let state_file = ProtectedFile::new(Path::new(data_dir).join("user_state.json"));
+    state_file.write(&user_state)?;
     
     println!("\n[OK] User node initialized");
     println!("\nTo start:");
@@ -285,6 +268,7 @@ async fn run_user(data_dir: &str, listen_addr: &str, dial_addr: Option<&str>) ->
         government_public_key: Some(gov_key),
         is_government: false,
         node_role: realm::types::NodeRole::User,
+        data_dir: Some(data_dir.to_string()),
     };
     
     let mut node = P2PNode::new(config)?;
@@ -434,9 +418,27 @@ async fn handle_user_event(
                                 RealmRequest::PushObject(bytes) => {
                                     println!("[PUSH] Received pushed object from {}", peer);
                                     
-                                    match node.handle_received_object(bytes) {
+                                    match node.handle_received_object(bytes.clone()) {
                                         Ok(_) => {
                                             println!("[PUSH] Object accepted and stored");
+                                            
+                                            // FIX: Rebroadcast to other connected peers (gossip protocol)
+                                            // This ensures updates propagate through the network
+                                            let all_peers: Vec<_> = node.swarm.connected_peers().cloned().collect();
+                                            let rebroadcast_count = all_peers.iter()
+                                                .filter(|&p| *p != peer) // Don't send back to sender
+                                                .count();
+                                            
+                                            if rebroadcast_count > 0 {
+                                                println!("[GOSSIP] Rebroadcasting to {} other peer(s)", rebroadcast_count);
+                                                for other_peer in all_peers {
+                                                    if other_peer != peer {
+                                                        node.push_object(other_peer, bytes.clone());
+                                                        println!("[GOSSIP] Forwarded to {}", other_peer);
+                                                    }
+                                                }
+                                            }
+                                            
                                             RealmResponse::PushAck
                                         }
                                         Err(e) => {
@@ -522,12 +524,13 @@ async fn handle_user_event(
 fn start_task(data_dir: &str, task_name: &str) -> Result<()> {
     println!("Starting task: {}\n", task_name);
     
-    // Load user state
-    let state_str = fs::read_to_string(Path::new(data_dir).join("user_state.json"))?;
-    let mut user_state: UserStateManager = serde_json::from_str(&state_str)?;
+    // Load user state using protected file
+    use realm::utils::file_protection::ProtectedFile;
+    let state_file = ProtectedFile::new(Path::new(data_dir).join("user_state.json"));
+    let mut user_state: UserStateManager = state_file.read()?;
     
     // Load government log to get task rules
-    let object_store = ObjectStore::new("./objects")?;
+    let object_store = OrganizedObjectStore::new("./objects")?;
     let objects = object_store.list_all()?;
     
     let mut task_rule: Option<ActionRule> = None;
@@ -562,11 +565,8 @@ fn start_task(data_dir: &str, task_name: &str) -> Result<()> {
     println!("    Labor: {}", user_state.resources.labor);
     println!("    Capital: {}", user_state.resources.capital);
     
-    // Save state
-    fs::write(
-        Path::new(data_dir).join("user_state.json"),
-        serde_json::to_string_pretty(&user_state)?,
-    )?;
+    // Save state using protected file
+    state_file.write(&user_state)?;
     
     println!("\nWait 60 seconds, then run:");
     println!("  user harvest-task {} --data-dir {}", task_name, data_dir);
@@ -577,12 +577,13 @@ fn start_task(data_dir: &str, task_name: &str) -> Result<()> {
 fn harvest_task(data_dir: &str, task_name: &str) -> Result<()> {
     println!("Harvesting task: {}\n", task_name);
     
-    // Load user state
-    let state_str = fs::read_to_string(Path::new(data_dir).join("user_state.json"))?;
-    let mut user_state: UserStateManager = serde_json::from_str(&state_str)?;
+    // Load user state using protected file
+    use realm::utils::file_protection::ProtectedFile;
+    let state_file = ProtectedFile::new(Path::new(data_dir).join("user_state.json"));
+    let mut user_state: UserStateManager = state_file.read()?;
     
     // Load government log to get multiplier
-    let object_store = ObjectStore::new("./objects")?;
+    let object_store = OrganizedObjectStore::new("./objects")?;
     let objects = object_store.list_all()?;
     
     let mut multiplier = 0;
@@ -599,18 +600,18 @@ fn harvest_task(data_dir: &str, task_name: &str) -> Result<()> {
         }
     }
     
-    let coins = user_state.harvest_task(task_name, multiplier)
+    let (coins, vdf_proof) = user_state.harvest_task(task_name, multiplier)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     
-    println!("[OK] Task harvested!");
+    println!("\n[OK] Task harvested!");
     println!("  Coins earned: {}", coins);
-    println!("  New balance: {}", user_state.coins);
+    println!("  VDF proof verified: {} iterations", vdf_proof.iterations);
+    println!("  New balance: {} coins", user_state.coins);
+    println!();
+    println!("{}", user_state.get_summary());
     
-    // Save state
-    fs::write(
-        Path::new(data_dir).join("user_state.json"),
-        serde_json::to_string_pretty(&user_state)?,
-    )?;
+    // Save state using protected file
+    state_file.write(&user_state)?;
     
     println!("\nNow create an obligation:");
     println!("  user submit-obligation {} --data-dir {}", coins, data_dir);
@@ -618,9 +619,7 @@ fn harvest_task(data_dir: &str, task_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn submit_obligation(data_dir: &str, amount: u64) -> Result<()> {
-    println!("Creating tax obligation for {} coins...\n", amount);
-    
+fn submit_obligation(data_dir: &str, amount: Option<u64>) -> Result<()> {
     // Load keys
     let signing_key_bytes = fs::read(Path::new(data_dir).join("signing_key.bin"))?;
     let signing_key = SigningKey::from_bytes(&signing_key_bytes.try_into()
@@ -631,34 +630,64 @@ fn submit_obligation(data_dir: &str, amount: u64) -> Result<()> {
     let mut realm_id = [0u8; 32];
     realm_id.copy_from_slice(&realm_id_bytes);
     
-    // Get current government log from object store
-    let object_store = ObjectStore::new("./objects")?;
+    // Get LATEST government log from object store
+    let object_store = OrganizedObjectStore::new("./objects")?;
     let objects = object_store.list_all()?;
     
-    let mut gov_log_ref: Option<GovernmentLogRef> = None;
+    let mut latest_log_info: Option<(GovernmentLogRef, u64, u64)> = None;  // (ref, version, tax_amount)
+    let mut highest_version = 0u64;
+    
     for hash in objects {
         if let Some(bytes) = object_store.get_object(&hash)? {
             if let Ok(RealmObject::GovernmentRuleLog(log)) = serde_json::from_slice(&bytes) {
-                // Use the log's internal log_hash, NOT the object store hash
-                gov_log_ref = Some(GovernmentLogRef {
-                    realm_id,
-                    log_hash: log.log_hash,
-                });
-                println!("[DEBUG] Found government log:");
-                println!("  Object hash:     {}", hex::encode(hash));
-                println!("  Log hash (used): {}", hex::encode(log.log_hash));
-                println!("  Version:         {}", log.version_number);
-                break;
+                // Find the log with highest version number
+                if log.version_number >= highest_version {
+                    highest_version = log.version_number;
+                    latest_log_info = Some((
+                        GovernmentLogRef {
+                            realm_id,
+                            log_hash: log.log_hash,
+                        },
+                        log.version_number,
+                        log.tax_amount,
+                    ));
+                    
+                    println!("[DEBUG] Found government log:");
+                    println!("  Object hash:     {}", hex::encode(hash));
+                    println!("  Log hash (used): {}", hex::encode(log.log_hash));
+                    println!("  Version:         {}", log.version_number);
+                    println!("  Tax amount:      {}", log.tax_amount);
+                }
             }
         }
     }
     
-    let gov_log_ref = gov_log_ref.ok_or_else(|| anyhow::anyhow!("No government log found. Connect to government first."))?;
+    let (gov_log_ref, gov_log_version, gov_tax_amount) = latest_log_info
+        .ok_or_else(|| anyhow::anyhow!("No government log found. Connect to government first."))?;
+    
+    println!("\n[USING] Latest government log version: {}", gov_log_version);
+    
+    // Check if user already paid for this version
+    use realm::utils::file_protection::ProtectedFile;
+    let state_file = ProtectedFile::new(Path::new(data_dir).join("user_state.json"));
+    let user_state: UserStateManager = state_file.read()?;
+    
+    if !user_state.needs_tax_payment(gov_log_version) {
+        println!("[INFO] Tax already paid for government log version {}", gov_log_version);
+        println!("\n{}", user_state.get_tax_status());
+        return Ok(());
+    }
+    
+    // Use tax_amount from government log (or override if provided)
+    let tax_amount = amount.unwrap_or(gov_tax_amount);
+    
+    println!("Creating tax obligation for {} coins (Gov log v{})...\n", 
+        tax_amount, gov_log_version);
     
     let mut obligation = TaxObligation {
         user_id: signing_key.verifying_key(),
         government_log: gov_log_ref,
-        coin_amount: amount,
+        coin_amount: tax_amount,
         obligation_hash: [0; 32],
         user_signature: [0; 64],
     };
@@ -681,6 +710,9 @@ fn submit_obligation(data_dir: &str, amount: u64) -> Result<()> {
     let sig = signing_key.sign(&obligation.obligation_hash);
     obligation.user_signature = sig.to_bytes();
     
+    // Save obligation_hash before obligation is moved
+    let obligation_hash_for_record = obligation.obligation_hash;
+    
     // Create envelope
     let envelope_bytes = serde_json::to_vec(&obligation)?;
     let envelope_sig = signing_key.sign(&envelope_bytes);
@@ -697,9 +729,21 @@ fn submit_obligation(data_dir: &str, amount: u64) -> Result<()> {
     
     object_store.store_object(object_hash.as_bytes(), &object_bytes)?;
     
-    println!("[OK] Obligation created!");
+    // Update user state to record tax payment
+    let mut user_state: UserStateManager = state_file.read()?;
+    user_state.record_tax_payment(tax_amount, gov_log_version, obligation_hash_for_record)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    
+    // Save updated state using protected file
+    state_file.write(&user_state)?;
+    
+    println!();
+    println!("[OK] Obligation created and tax payment recorded!");
     println!("  Hash: {}", hex::encode(object_hash.as_bytes()));
-    println!("  Amount: {} coins", amount);
+    println!("  Amount: {} coins", tax_amount);
+    println!("  Government log version: {}", gov_log_version);
+    println!();
+    println!("{}", user_state.get_summary());
     
     // NEW: Queue for broadcast when node is running
     fs::create_dir_all("./pending_push")?;
@@ -725,11 +769,34 @@ fn send_coins(data_dir: &str, to_hex: &str, amount: i64) -> Result<()> {
     let to_bytes = hex::decode(to_hex)?;
     let to_key = VerifyingKey::from_bytes(to_bytes.as_slice().try_into()?)?;
     
+    // Load and update user state - deduct coins immediately
+    use realm::utils::file_protection::ProtectedFile;
+    use realm::user::state_manager::UserStateManager;
+    
+    let state_file = ProtectedFile::new(Path::new(data_dir).join("user_state.json"));
+    let mut user_state: UserStateManager = state_file.read()?;
+    
+    // Check balance
+    if user_state.coins < amount {
+        anyhow::bail!(
+            "Insufficient balance: have {} coins, need {}",
+            user_state.coins,
+            amount
+        );
+    }
+    
+    // Deduct coins from sender
+    user_state.coins -= amount;
+    state_file.write(&user_state)?;
+    
+    println!("[STATE] Deducted {} coins from sender balance", amount);
+    println!("  New balance: {} coins", user_state.coins);
+    
     // Create P2P transfer receipt
     let mut receipt = P2PTransferReceipt {
         from: signing_key.verifying_key(),
         to: to_key,
-        amount: -amount,
+        amount: -amount, // Negative for sender
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs(),
@@ -755,15 +822,21 @@ fn send_coins(data_dir: &str, to_hex: &str, amount: i64) -> Result<()> {
     let object_bytes = serde_json::to_vec(&object)?;
     let object_hash = blake3::hash(&object_bytes);
     
-    let object_store = ObjectStore::new("./objects")?;
+    let object_store = OrganizedObjectStore::new("./objects")?;
     object_store.store_object(object_hash.as_bytes(), &object_bytes)?;
     
     println!("[OK] P2P transfer created!");
     println!("  Hash: {}", hex::encode(object_hash.as_bytes()));
     println!("  Amount: {} coins", amount);
     
-    println!("\nTransfer stored locally.");
-    println!("Connect to recipient to deliver payment.");
+    // Queue for broadcast when node is running
+    fs::create_dir_all("./pending_push")?;
+    let pending_file = format!("./pending_push/{}.json", hex::encode(object_hash.as_bytes()));
+    fs::write(&pending_file, &object_bytes)?;
+    
+    println!("\nTransfer stored locally and queued for delivery.");
+    println!("Start your node to send payment to recipient:");
+    println!("  user run --data-dir {}", data_dir);
     
     Ok(())
 }
@@ -783,22 +856,70 @@ fn show_status(data_dir: &str) -> Result<()> {
     println!("Gov Key:        {}", gov_key.trim());
     println!("User Key:       {}", hex::encode(signing_key.verifying_key().to_bytes()));
     
-    // Load user state
-    if let Ok(state_str) = fs::read_to_string(Path::new(data_dir).join("user_state.json")) {
-        if let Ok(user_state) = serde_json::from_str::<UserStateManager>(&state_str) {
-            println!("\nBalance:        {} coins", user_state.coins);
-            println!("Active Tasks:   {}", user_state.active_tasks.len());
-            println!("\nResources:");
+    // Load user state using protected file
+    use realm::utils::file_protection::ProtectedFile;
+    let state_file = ProtectedFile::new(Path::new(data_dir).join("user_state.json"));
+    
+    if state_file.exists() {
+        match state_file.read::<UserStateManager>() {
+            Ok(user_state) => {
+                println!("\n--- STATE ---");
+                println!("{}", user_state.get_summary());
+            
+            println!("\n--- RESOURCES ---");
             println!("  Land:         {}", user_state.resources.land);
             println!("  Labor:        {}", user_state.resources.labor);
             println!("  Capital:      {}", user_state.resources.capital);
+            
+            if !user_state.active_tasks.is_empty() {
+                println!("\n--- ACTIVE TASKS ---");
+                for (name, task) in &user_state.active_tasks {
+                    let current_time = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    let elapsed = current_time.saturating_sub(task.start_time);
+                    let remaining = task.duration.saturating_sub(elapsed);
+                    
+                    println!("  {}: {} seconds remaining", name, remaining);
+                }
+            }
+            
+            if !user_state.completed_tasks.is_empty() {
+                println!("\n--- COMPLETED TASKS (Last 5) ---");
+                for task in user_state.completed_tasks.iter().rev().take(5) {
+                    println!("  {} - {} coins (VDF: {} iterations)",
+                        task.task_name,
+                        task.coins_earned,
+                        task.vdf_proof.iterations
+                    );
+                }
+            }
+            
+            if !user_state.tax_payments.is_empty() {
+                println!("\n--- TAX PAYMENTS ---");
+                println!("{}", user_state.get_tax_status());
+            }
+            }
+            Err(e) => {
+                eprintln!("\n[ERROR] Failed to load user state: {}", e);
+                eprintln!("This may indicate the file has been tampered with.");
+            }
         }
     }
     
-    // Check object store
-    if let Ok(store) = ObjectStore::new("./objects") {
+    // Check object store with organized folders
+    use realm::storage::{OrganizedObjectStore};
+    
+    if let Ok(store) = OrganizedObjectStore::new("./objects") {
+        println!("\n--- OBJECT STORE (Organized) ---");
+        if let Ok(stats) = store.get_stats() {
+            println!("{}", stats.display());
+        }
+    } else if let Ok(store) = ObjectStore::new("./objects") {
         if let Ok(objects) = store.list_all() {
-            println!("\nObject Store:   {} objects", objects.len());
+            println!("\n--- OBJECT STORE ---");
+            println!("  Total objects: {}", objects.len());
             
             let mut gov_logs = 0;
             let mut obligations = 0;

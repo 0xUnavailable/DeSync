@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use anyhow::Result;
 use serde::{Serialize, Deserialize};
-use crate::types::{HASH, RealmObject, GovernmentRuleLog};
+use crate::types::{HASH, RealmObject};
 
 /// Index mapping version numbers to log hashes for efficient retrieval
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -82,8 +82,11 @@ impl LogVersionIndex {
     }
 }
 
-/// Helper to build index from object store
-pub fn build_index_from_store(object_store: &crate::storage::ObjectStore) -> Result<LogVersionIndex> {
+/// Helper to build index from object store (works with both ObjectStore and OrganizedObjectStore)
+pub fn build_index_from_store<T>(object_store: &T) -> Result<LogVersionIndex> 
+where
+    T: crate::storage::ObjectStoreInterface,
+{
     let mut index = LogVersionIndex::new();
     
     // Get all object hashes

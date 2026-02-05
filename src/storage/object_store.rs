@@ -140,6 +140,25 @@ impl ObjectStore {
     }
 }
 
+// Implement the common interface trait
+impl crate::storage::ObjectStoreInterface for ObjectStore {
+    fn list_all(&self) -> Result<Vec<crate::types::HASH>> {
+        self.list_all()
+    }
+    
+    fn get_object(&self, hash: &crate::types::HASH) -> Result<Option<Vec<u8>>> {
+        self.get(hash)
+    }
+    
+    fn store_object(&self, hash: &crate::types::HASH, bytes: &[u8]) -> Result<()> {
+        self.put(*hash, bytes.to_vec())
+    }
+    
+    fn has_object(&self, hash: &crate::types::HASH) -> bool {
+        self.has(hash)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
