@@ -1,16 +1,15 @@
-use anyhow::Result;
-use clap::{Parser, Subcommand};
-use ed25519_dalek::{SigningKey, Signer};
 use std::fs;
+use anyhow::Result;
 use std::path::Path;
-
-use realm::gov::log_manager::GovernmentNode;
-use realm::gov::receipt_signing::sign_tax_receipt;
-use realm::types::{HASH, RealmObject, Resources};
-use realm::storage::{OrganizedObjectStore};
-use realm::network::libp2p::{P2PNode, NetworkConfig};
 use libp2p::Multiaddr;
 use futures::StreamExt;
+use clap::{Parser, Subcommand};
+use ed25519_dalek::{Signer, SigningKey};
+use realm::storage::OrganizedObjectStore;
+use realm::gov::log_manager::GovernmentNode;
+use realm::types::{RealmObject, Resources, HASH};
+use realm::gov::receipt_signing::sign_tax_receipt;
+use realm::network::libp2p::{NetworkConfig, P2PNode};
 
 #[derive(Parser)]
 #[command(name = "government")]
@@ -22,110 +21,79 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a new government (creates keys and genesis log)
     Init {
-        /// Path to store government keys
         #[arg(long, default_value = "gov_keys")]
         keys_dir: String,
     },
-    
-    /// Start the government node
+
     Run {
-        /// Path to government keys
         #[arg(long, default_value = "gov_keys")]
         keys_dir: String,
-        
-        /// Address to listen on
         #[arg(long, default_value = "/ip4/0.0.0.0/tcp/4001")]
         listen: String,
     },
-    
-    /// Show government info
+
     Info {
-        /// Path to government keys
         #[arg(long, default_value = "gov_keys")]
         keys_dir: String,
     },
-    
-    /// Set new tax amount (creates new log version)
+
     SetTax {
-        /// New tax amount in coins
         #[arg(long)]
         amount: u64,
-        
-        /// Path to government keys
         #[arg(long, default_value = "gov_keys")]
         keys_dir: String,
     },
-    
-    /// Add a new economic task rule
+
     AddTask {
-        /// Task name (e.g., "trading")
         #[arg(long)]
         name: String,
-        
-        /// Coin multiplier for task
+
         #[arg(long)]
         multiplier: u64,
-        
-        /// Required land resources
+
         #[arg(long)]
         land: u64,
-        
-        /// Required labor resources
+
         #[arg(long)]
         labor: u64,
-        
-        /// Required capital resources
+
         #[arg(long)]
         capital: u64,
-        
-        /// Path to government keys
+
         #[arg(long, default_value = "gov_keys")]
         keys_dir: String,
     },
-    
-    /// Modify existing task parameters
+
     ModifyTask {
-        /// Task name to modify
         #[arg(long)]
         name: String,
-        
-        /// New multiplier (optional)
+
         #[arg(long)]
         multiplier: Option<u64>,
-        
-        /// New land requirement (optional)
+
         #[arg(long)]
         land: Option<u64>,
-        
-        /// New labor requirement (optional)
+
         #[arg(long)]
         labor: Option<u64>,
-        
-        /// New capital requirement (optional)
+
         #[arg(long)]
         capital: Option<u64>,
-        
-        /// Path to government keys
+
         #[arg(long, default_value = "gov_keys")]
         keys_dir: String,
     },
-    
-    /// Remove a task rule
+
     RemoveTask {
-        /// Task name to remove
         #[arg(long)]
         name: String,
-        
-        /// Path to government keys
+
         #[arg(long, default_value = "gov_keys")]
         keys_dir: String,
     },
-    
-    /// Show current government rules
+
     ShowRules {
-        /// Path to government keys
         #[arg(long, default_value = "gov_keys")]
         keys_dir: String,
     },
@@ -133,95 +101,98 @@ enum Commands {
 
 fn main() -> Result<()> {
     env_logger::init();
-    
+
     let cli = Cli::parse();
-    
+
     match cli.command {
         Commands::Init { keys_dir } => {
             init_government(&keys_dir)?;
         }
-        
+
         Commands::Run { keys_dir, listen } => {
-            tokio::runtime::Runtime::new()?.block_on(async {
-                run_government(&keys_dir, &listen).await
-            })?;
+            tokio::runtime::Runtime::new()?
+                .block_on(async { run_government(&keys_dir, &listen).await })?;
         }
-        
-        
+
         Commands::Info { keys_dir } => {
             show_info(&keys_dir)?;
         }
-        
+
         Commands::SetTax { amount, keys_dir } => {
             set_tax(&keys_dir, amount)?;
         }
-        
-        Commands::AddTask { name, multiplier, land, labor, capital, keys_dir } => {
+
+        Commands::AddTask {
+            name,
+            multiplier,
+            land,
+            labor,
+            capital,
+            keys_dir,
+        } => {
             add_task(&keys_dir, name, multiplier, land, labor, capital)?;
         }
-        
-        Commands::ModifyTask { name, multiplier, land, labor, capital, keys_dir } => {
+
+        Commands::ModifyTask {
+            name,
+            multiplier,
+            land,
+            labor,
+            capital,
+            keys_dir,
+        } => {
             modify_task(&keys_dir, &name, multiplier, land, labor, capital)?;
         }
-        
+
         Commands::RemoveTask { name, keys_dir } => {
             remove_task(&keys_dir, &name)?;
         }
-        
+
         Commands::ShowRules { keys_dir } => {
             show_rules(&keys_dir)?;
         }
     }
-    
+
     Ok(())
 }
 
 fn init_government(keys_dir: &str) -> Result<()> {
     println!("Initializing government node...");
-    
-    // Create keys directory
+
     fs::create_dir_all(keys_dir)?;
-    
-    // Generate new signing key
+
     let signing_key = SigningKey::generate(&mut rand::thread_rng());
     let verifying_key = signing_key.verifying_key();
-    
-    // Save signing key (KEEP SECURE!)
+
     fs::write(
         Path::new(keys_dir).join("signing_key.bin"),
         signing_key.to_bytes(),
     )?;
-    println!("[OK] Generated signing key (saved to {}/signing_key.bin)", keys_dir);
+    println!(
+        "[OK] Generated signing key (saved to {}/signing_key.bin)",
+        keys_dir
+    );
     println!("  WARNING: Keep this file secure!");
-    
-    // Save verifying key (public)
+
     let verifying_key_hex = hex::encode(verifying_key.to_bytes());
     fs::write(
         Path::new(keys_dir).join("verifying_key.txt"),
         &verifying_key_hex,
     )?;
     println!("[OK] Public key: {}", verifying_key_hex);
-    
-    // Generate realm ID (deterministic from public key for reproducibility)
+
     let realm_id: HASH = *blake3::hash(&verifying_key.to_bytes()).as_bytes();
     let realm_id_hex = hex::encode(realm_id);
-    fs::write(
-        Path::new(keys_dir).join("realm_id.txt"),
-        &realm_id_hex,
-    )?;
+    fs::write(Path::new(keys_dir).join("realm_id.txt"), &realm_id_hex)?;
     println!("[OK] Realm ID: {}", realm_id_hex);
-    
-    // Generate genesis government log
-    let genesis_log = GovernmentNode::generate_genesis_government_log(
-        realm_id,
-        &signing_key,
-    )?;
-    
+
+    let genesis_log = GovernmentNode::generate_genesis_government_log(realm_id, &signing_key)?;
     println!("\n[OK] Genesis log created:");
     println!("  Version: {}", genesis_log.version_number);
     println!("  Rules:");
     for rule in &genesis_log.state_rules {
-        println!("    - {}: {} coins (land={}, labor={}, capital={})",
+        println!(
+            "    - {}: {} coins (land={}, labor={}, capital={})",
             rule.task_name,
             rule.coin_multiplier,
             rule.required_resources.land,
@@ -229,158 +200,154 @@ fn init_government(keys_dir: &str) -> Result<()> {
             rule.required_resources.capital,
         );
     }
-    
-    // Save genesis log as RealmObject
+
     let genesis_object = RealmObject::GovernmentRuleLog(genesis_log.clone());
     let genesis_bytes = serde_json::to_vec(&genesis_object)?;
     let genesis_hash = blake3::hash(&genesis_bytes);
-    
+
     fs::write(
         Path::new(keys_dir).join("genesis.json"),
         serde_json::to_string_pretty(&genesis_object)?,
     )?;
     println!("\n[OK] Genesis saved to {}/genesis.json", keys_dir);
     println!("  Hash: {}", hex::encode(genesis_hash.as_bytes()));
-    
-    // Store in object store
+
     let object_store = OrganizedObjectStore::new_government("./objects")?;
     object_store.store_object(genesis_hash.as_bytes(), &genesis_bytes)?;
     println!("[OK] Genesis loaded into object store");
-    
-    // Save government state
+
     let mut gov_node = GovernmentNode::new(signing_key);
     gov_node.latest_log = Some(genesis_log);
-    
+
     let gov_state = serde_json::to_string_pretty(&gov_node)?;
-    fs::write(
-        Path::new(keys_dir).join("state.json"),
-        gov_state,
-    )?;
-    
-    println!("\n=== SETUP COMPLETE ===");
+    fs::write(Path::new(keys_dir).join("state.json"), gov_state)?;
+
     println!("\nShare with users:");
     println!("  Realm ID:     {}", realm_id_hex);
     println!("  Gov Key:      {}", verifying_key_hex);
     println!("\nTo start the government node:");
     println!("  government run --keys-dir {}", keys_dir);
-    
+
     Ok(())
 }
 
 async fn run_government(keys_dir: &str, listen_addr: &str) -> Result<()> {
     println!("Starting government node...");
-    
-    // Load keys
+
     let signing_key_bytes = fs::read(Path::new(keys_dir).join("signing_key.bin"))?;
-    let signing_key = SigningKey::from_bytes(&signing_key_bytes.try_into()
-        .map_err(|_| anyhow::anyhow!("Invalid signing key"))?);
-    
+    let signing_key = SigningKey::from_bytes(
+        &signing_key_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid signing key"))?,
+    );
+
     let realm_id_hex = fs::read_to_string(Path::new(keys_dir).join("realm_id.txt"))?;
     let realm_id_bytes = hex::decode(realm_id_hex.trim())?;
     let mut realm_id = [0u8; 32];
     realm_id.copy_from_slice(&realm_id_bytes);
-    
+
     println!("[OK] Loaded government keys");
     println!("  Realm ID: {}", hex::encode(realm_id));
-    println!("  Public key: {}", hex::encode(signing_key.verifying_key().to_bytes()));
-    
-    // Load object store
+    println!(
+        "  Public key: {}",
+        hex::encode(signing_key.verifying_key().to_bytes())
+    );
+
     let object_store = OrganizedObjectStore::new_government("./objects")?;
-    
-    // Read genesis hash from genesis.json for verification
+
     let genesis_str = fs::read_to_string(Path::new(keys_dir).join("genesis.json"))?;
     let genesis_object: RealmObject = serde_json::from_str(&genesis_str)?;
     let genesis_bytes = serde_json::to_vec(&genesis_object)?;
     let genesis_hash = blake3::hash(&genesis_bytes);
-    
-    // Verify genesis exists in object store
+
     if !object_store.has_object(genesis_hash.as_bytes()) {
         return Err(anyhow::anyhow!(
             "Genesis log not found in object store. Run 'government init' first."
         ));
     }
-    
-    // Load the LATEST government log from object store (not just genesis)
+
     use realm::gov::rule_manager;
     let latest_log = rule_manager::get_latest_log(&object_store)?;
-    
+
     println!("[INIT] Loading government log from object store...");
     println!("  Genesis hash: {}", hex::encode(genesis_hash.as_bytes()));
     println!("  Latest log version: {}", latest_log.version_number);
     println!("  Latest log hash: {}", hex::encode(latest_log.log_hash));
     println!("  Current tax: {} coins", latest_log.tax_amount);
-    
-    // Create libp2p keypair from ed25519 key
+
     let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(signing_key.to_bytes())?;
-    
+
     let config = NetworkConfig {
         realm_id,
         keypair: libp2p_keypair,
         government_public_key: Some(signing_key.verifying_key()),
         is_government: true,
         node_role: realm::types::NodeRole::Government,
-        data_dir: None,  // Government node doesn't have a user data directory
+        data_dir: None, 
     };
-    
+
     let mut node = P2PNode::new(config)?;
-    
-    // Apply LATEST log to node state (not genesis)
     use realm::network::state_apply::apply_object_to_state;
-    
     println!("[INIT] Applying latest government log to state...");
     apply_object_to_state(
         RealmObject::GovernmentRuleLog(latest_log.clone()),
         &mut node.state,
-        &node.config
+        &node.config,
     )?;
-    
+
     println!("[OK] Government log applied to state");
-    println!("  Current state version: {}", node.state.latest_gov_log_version);
-    println!("  Latest gov log present: {}", node.state.latest_government_log.is_some());
-    
-    // Listen
+    println!(
+        "  Current state version: {}",
+        node.state.latest_gov_log_version
+    );
+    println!(
+        "  Latest gov log present: {}",
+        node.state.latest_government_log.is_some()
+    );
+
     let addr: Multiaddr = listen_addr.parse()?;
     node.listen(addr.clone())?;
-    
+
     println!("\n[OK] Government node running");
     println!("  Listening on: {}", listen_addr);
-    
-    // DEBUG: Verify state before entering event loop
+
     println!("[DEBUG] State verification before event loop:");
-    println!("  Latest gov log version: {}", node.state.latest_gov_log_version);
-    println!("  Latest gov log present: {}", node.state.latest_government_log.is_some());
+    println!(
+        "  Latest gov log version: {}",
+        node.state.latest_gov_log_version
+    );
+    println!(
+        "  Latest gov log present: {}",
+        node.state.latest_government_log.is_some()
+    );
     if let Some(ref log) = node.state.latest_government_log {
         println!("  Latest gov log hash: {}", hex::encode(log.log_hash));
     }
-    
+
     println!("\nWaiting for connections...\n");
-    
+
     // Periodic log check timer (every 10 seconds)
     let mut log_check_interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
     let mut last_known_version = latest_log.version_number;
-    
-    // Event loop
+
     loop {
         tokio::select! {
             event = node.swarm.next() => {
                 if let Some(event) = event {
-                    // FIX #7: Pass signing_key to event handler for receipt generation
                     if let Err(e) = handle_government_event(&mut node, &signing_key, event).await {
                         eprintln!("Error handling event: {}", e);
                     }
                 }
             }
-            
+
             _ = log_check_interval.tick() => {
-                // Check for new government logs
                 match rule_manager::get_latest_log(&object_store) {
                     Ok(new_latest) if new_latest.version_number > last_known_version => {
                         println!("\n[UPDATE] New government log detected!");
                         println!("  Old version: {}", last_known_version);
                         println!("  New version: {}", new_latest.version_number);
                         println!("  New tax: {} coins", new_latest.tax_amount);
-                        
-                        // Apply new log to state
+
                         if let Err(e) = apply_object_to_state(
                             RealmObject::GovernmentRuleLog(new_latest.clone()),
                             &mut node.state,
@@ -390,12 +357,10 @@ async fn run_government(keys_dir: &str, listen_addr: &str) -> Result<()> {
                         } else {
                             last_known_version = new_latest.version_number;
                             println!("[OK] New log applied to state");
-                            
-                            // FIX: Push the new government log directly to all connected peers
+
                             let connected_peers: Vec<_> = node.swarm.connected_peers().cloned().collect();
                             println!("[BROADCAST] Pushing new log to {} connected peers", connected_peers.len());
-                            
-                            // Serialize the new government log
+
                             let new_log_obj = RealmObject::GovernmentRuleLog(new_latest.clone());
                             match serde_json::to_vec(&new_log_obj) {
                                 Ok(new_log_bytes) => {
@@ -410,7 +375,7 @@ async fn run_government(keys_dir: &str, listen_addr: &str) -> Result<()> {
                             }
                         }
                     }
-                    Ok(_) => {} // No new log
+                    Ok(_) => {} 
                     Err(e) => eprintln!("[ERROR] Failed to check for new logs: {}", e),
                 }
             }
@@ -418,7 +383,6 @@ async fn run_government(keys_dir: &str, listen_addr: &str) -> Result<()> {
     }
 }
 
-/// FIX #7: Helper function to process obligation and send receipt back to user
 fn process_obligation_and_send_receipt(
     signing_key: &SigningKey,
     obligation: &realm::types::TaxObligation,
@@ -426,69 +390,84 @@ fn process_obligation_and_send_receipt(
     node: &mut P2PNode,
     peer: libp2p::PeerId,
 ) -> Result<()> {
-    use realm::types::{TaxReceiptEnvelope, RealmObject};
-    
-    println!("[RECEIPT] Processing obligation from user {}", hex::encode(obligation.user_id.to_bytes()));
-    println!("  Obligation hash: {}", hex::encode(obligation.obligation_hash));
+    use realm::types::{RealmObject, TaxReceiptEnvelope};
+
+    println!(
+        "[RECEIPT] Processing obligation from user {}",
+        hex::encode(obligation.user_id.to_bytes())
+    );
+    println!(
+        "  Obligation hash: {}",
+        hex::encode(obligation.obligation_hash)
+    );
     println!("  Coin amount: {}", obligation.coin_amount);
-    
-    // DEBUG: Check state before creating GovernmentNode
+
     println!("[DEBUG] Node state before processing:");
-    println!("  Latest gov log version: {}", node.state.latest_gov_log_version);
-    println!("  Latest gov log present: {}", node.state.latest_government_log.is_some());
-    println!("  Previous gov log present: {}", node.state.previous_government_log.is_some());
-    
-    // FIX #7a: Ensure we have a government log before creating GovernmentNode
-    let latest_log = node.state.latest_government_log.clone()
+    println!(
+        "  Latest gov log version: {}",
+        node.state.latest_gov_log_version
+    );
+    println!(
+        "  Latest gov log present: {}",
+        node.state.latest_government_log.is_some()
+    );
+    println!(
+        "  Previous gov log present: {}",
+        node.state.previous_government_log.is_some()
+    );
+
+    let latest_log = node
+        .state
+        .latest_government_log
+        .clone()
         .ok_or_else(|| anyhow::anyhow!("No government log available in state"))?;
-    
-    println!("[DEBUG] Creating GovernmentNode with latest log: {}", hex::encode(latest_log.log_hash));
-    
-    // Create a GovernmentNode with the logs properly set
+
+    println!(
+        "[DEBUG] Creating GovernmentNode with latest log: {}",
+        hex::encode(latest_log.log_hash)
+    );
+
     let mut gov_node = GovernmentNode::new(signing_key.clone());
     gov_node.latest_log = Some(latest_log);
     gov_node.previous_log = node.state.previous_government_log.clone();
-    
+
     println!("[DEBUG] GovernmentNode created, signing receipt...");
-    
-    // Sign the receipt
+
     let receipt = sign_tax_receipt(
-        &gov_node,
-        obligation,
-        None,  // No previous receipt hash
-        1,     // Payment slot
+        &gov_node, obligation, None, 
+        1,  
     )?;
-    
+
     println!("[RECEIPT] Signed receipt:");
     println!("  Coins transferred: {}", receipt.coins_transferred);
-    
-    // Create receipt envelope
+
     let receipt_bytes = serde_json::to_vec(&receipt)?;
     let receipt_sig = signing_key.sign(&receipt_bytes);
-    
+
     let receipt_envelope = TaxReceiptEnvelope {
         receipt: receipt.clone(),
         signature: receipt_sig.to_bytes(),
     };
-    
-    // Store receipt in object store
+
     let receipt_obj = RealmObject::TaxReceiptEnvelope(receipt_envelope.clone());
     let receipt_obj_bytes = serde_json::to_vec(&receipt_obj)?;
     let receipt_hash = blake3::hash(&receipt_obj_bytes);
-    
-    node.object_store.store_object(receipt_hash.as_bytes(), &receipt_obj_bytes)?;
-    println!("[RECEIPT] Receipt stored in object store: {}", hex::encode(receipt_hash.as_bytes()));
-    
-    // Send receipt back to user
+
+    node.object_store
+        .store_object(receipt_hash.as_bytes(), &receipt_obj_bytes)?;
+    println!(
+        "[RECEIPT] Receipt stored in object store: {}",
+        hex::encode(receipt_hash.as_bytes())
+    );
+
     node.push_object(peer, receipt_obj_bytes);
     println!("[RECEIPT] Receipt sent to user {}", peer);
-    
-    // FIX #7b: Delete the obligation from government's object store after receipt is sent
+
     match node.object_store.delete(obligation_hash) {
         Ok(_) => println!("[CLEANUP] Obligation removed from government storage"),
         Err(e) => eprintln!("[WARN] Failed to delete obligation: {}", e),
     }
-    
+
     Ok(())
 }
 
@@ -497,32 +476,35 @@ async fn handle_government_event(
     signing_key: &SigningKey,
     event: libp2p::swarm::SwarmEvent<realm::network::libp2p::RealmBehaviourEvent>,
 ) -> Result<()> {
-    use libp2p::swarm::SwarmEvent;
     use libp2p::request_response::Event as RREvent;
+    use libp2p::swarm::SwarmEvent;
     use realm::network::protocol::{RealmRequest, RealmResponse};
-    
+
     match event {
         SwarmEvent::NewListenAddr { address, .. } => {
             let peer_id = node.swarm.local_peer_id();
             let full_addr = format!("{}/p2p/{}", address, peer_id);
             println!("[NET] Listening on {}", full_addr);
         }
-        
+
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
             println!("[NET] Peer connected: {}", peer_id);
-            // Send Hello message
             node.send_hello(peer_id);
         }
-        
+
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
             println!("[NET] Peer disconnected: {}", peer_id);
         }
-        
-        SwarmEvent::Behaviour(realm::network::libp2p::RealmBehaviourEvent::RequestResponse(rr_event)) => {
+
+        SwarmEvent::Behaviour(realm::network::libp2p::RealmBehaviourEvent::RequestResponse(
+            rr_event,
+        )) => {
             match rr_event {
                 RREvent::Message { peer, message } => {
                     match message {
-                        libp2p::request_response::Message::Request { request, channel, .. } => {
+                        libp2p::request_response::Message::Request {
+                            request, channel, ..
+                        } => {
                             let response = match request {
                                 RealmRequest::Hello(hello) => {
                                     if let Err(e) = node.handle_hello(peer, hello.clone()) {
@@ -533,30 +515,44 @@ async fn handle_government_event(
                                         realm_id: node.config.realm_id,
                                     }
                                 }
-                                
+
                                 RealmRequest::GetHead => {
                                     let head = node.get_head();
-                                    println!("[SYNC] Sending head to {}: version={}", peer, head.gov_log_version);
+                                    println!(
+                                        "[SYNC] Sending head to {}: version={}",
+                                        peer, head.gov_log_version
+                                    );
                                     RealmResponse::Head(head)
                                 }
-                                
+
                                 RealmRequest::GetObject(hash) => {
                                     match node.object_store.get_object(&hash)? {
                                         Some(bytes) => {
-                                            println!("[SYNC] Sending object to {}: {} bytes", peer, bytes.len());
+                                            println!(
+                                                "[SYNC] Sending object to {}: {} bytes",
+                                                peer,
+                                                bytes.len()
+                                            );
                                             RealmResponse::Object(bytes)
                                         }
                                         None => {
-                                            println!("[WARN]  Object not found: {}", hex::encode(hash));
+                                            println!(
+                                                "[WARN]  Object not found: {}",
+                                                hex::encode(hash)
+                                            );
                                             RealmResponse::Error("Object not found".to_string())
                                         }
                                     }
                                 }
-                                
+
                                 RealmRequest::LogRequest { start_version } => {
-                                    // Government serves log requests from users
                                     use realm::network::sync::build_logs_chunk;
-                                    match build_logs_chunk(start_version, 100, &node.object_store, &node.log_index) {
+                                    match build_logs_chunk(
+                                        start_version,
+                                        100,
+                                        &node.object_store,
+                                        &node.log_index,
+                                    ) {
                                         Ok(logs) => {
                                             println!("[SYNC] Sending {} logs to {} starting from version {}", 
                                                 logs.len(), peer, start_version);
@@ -564,38 +560,41 @@ async fn handle_government_event(
                                         }
                                         Err(e) => {
                                             eprintln!("[ERROR] Failed to build logs chunk: {}", e);
-                                            RealmResponse::Error(format!("Failed to build logs: {}", e))
+                                            RealmResponse::Error(format!(
+                                                "Failed to build logs: {}",
+                                                e
+                                            ))
                                         }
                                     }
                                 }
-                                
+
                                 RealmRequest::PushObject(bytes) => {
                                     println!("[PUSH] Received pushed object from {}", peer);
-                                    
-                                    // Verify it's not a government log (users can't create those)
+
                                     if let Ok(obj) = serde_json::from_slice::<RealmObject>(&bytes) {
                                         match obj {
                                             RealmObject::GovernmentRuleLog(_) => {
                                                 println!("[SECURITY] Rejected government log from user {}", peer);
-                                                RealmResponse::Error("Users cannot create government logs".to_string())
+                                                RealmResponse::Error(
+                                                    "Users cannot create government logs"
+                                                        .to_string(),
+                                                )
                                             }
                                             RealmObject::TaxObligationEnvelope(ref env) => {
-                                                // FIX #7: Process obligation and generate receipt immediately
-                                                
-                                                // Calculate the obligation object hash for cleanup
-                                                let obligation_obj_hash = *blake3::hash(&bytes).as_bytes();
-                                                
+
+                                                let obligation_obj_hash =
+                                                    *blake3::hash(&bytes).as_bytes();
+
                                                 match node.handle_received_object(bytes.clone()) {
                                                     Ok(_) => {
                                                         println!("[PUSH] Tax obligation accepted and stored");
-                                                        
-                                                        // Generate and send receipt automatically
+
                                                         match process_obligation_and_send_receipt(
-                                                            &signing_key, 
+                                                            &signing_key,
                                                             &env.obligation,
                                                             &obligation_obj_hash,
-                                                            node, 
-                                                            peer
+                                                            node,
+                                                            peer,
                                                         ) {
                                                             Ok(_) => {
                                                                 println!("[RECEIPT] Generated and sent receipt to user");
@@ -604,27 +603,31 @@ async fn handle_government_event(
                                                                 eprintln!("[ERROR] Failed to generate receipt: {}", e);
                                                             }
                                                         }
-                                                        
+
                                                         RealmResponse::PushAck
                                                     }
                                                     Err(e) => {
                                                         eprintln!("[ERROR] Failed to process pushed obligation: {}", e);
-                                                        RealmResponse::Error(format!("Invalid obligation: {}", e))
+                                                        RealmResponse::Error(format!(
+                                                            "Invalid obligation: {}",
+                                                            e
+                                                        ))
                                                     }
                                                 }
                                             }
-                                            _ => {
-                                                match node.handle_received_object(bytes) {
-                                                    Ok(_) => {
-                                                        println!("[PUSH] Object accepted and stored");
-                                                        RealmResponse::PushAck
-                                                    }
-                                                    Err(e) => {
-                                                        eprintln!("[ERROR] Failed to process pushed object: {}", e);
-                                                        RealmResponse::Error(format!("Invalid object: {}", e))
-                                                    }
+                                            _ => match node.handle_received_object(bytes) {
+                                                Ok(_) => {
+                                                    println!("[PUSH] Object accepted and stored");
+                                                    RealmResponse::PushAck
                                                 }
-                                            }
+                                                Err(e) => {
+                                                    eprintln!("[ERROR] Failed to process pushed object: {}", e);
+                                                    RealmResponse::Error(format!(
+                                                        "Invalid object: {}",
+                                                        e
+                                                    ))
+                                                }
+                                            },
                                         }
                                     } else {
                                         eprintln!("[ERROR] Failed to parse pushed object");
@@ -632,53 +635,65 @@ async fn handle_government_event(
                                     }
                                 }
                             };
-                            
-                            let _ = node.swarm.behaviour_mut()
+
+                            let _ = node
+                                .swarm
+                                .behaviour_mut()
                                 .request_response
                                 .send_response(channel, response);
                         }
-                        
+
                         libp2p::request_response::Message::Response { response, .. } => {
                             match response {
                                 RealmResponse::HelloAck { role, realm_id } => {
-                                    println!("[HANDSHAKE] Received HelloAck from {} as {:?}, realm {:?}", 
-                                        peer, role, hex::encode(&realm_id[..8]));
-                                    // Initiate sync after handshake
+                                    println!(
+                                        "[HANDSHAKE] Received HelloAck from {} as {:?}, realm {:?}",
+                                        peer,
+                                        role,
+                                        hex::encode(&realm_id[..8])
+                                    );
                                     if let Err(e) = node.sync_with_peer(peer) {
                                         eprintln!("[SYNC] Error starting sync: {}", e);
                                     }
                                 }
-                                
+
                                 RealmResponse::Head(peer_head) => {
-                                    println!("[SYNC] Received head from {}: version={}", peer, peer_head.gov_log_version);
+                                    println!(
+                                        "[SYNC] Received head from {}: version={}",
+                                        peer, peer_head.gov_log_version
+                                    );
                                     node.handle_peer_head(peer, peer_head)?;
                                 }
-                                
+
                                 RealmResponse::Object(bytes) => {
-                                    // Government nodes should not receive GovernmentRuleLog objects from peers
-                                    // But they can accept TaxObligationEnvelope and other objects
                                     if let Ok(obj) = serde_json::from_slice::<RealmObject>(&bytes) {
                                         match obj {
                                             RealmObject::GovernmentRuleLog(_) => {
                                                 println!("[WARN] Government received GovernmentRuleLog from {} - rejecting", peer);
                                             }
                                             _ => {
-                                                println!("[SYNC] Received object from {}: {} bytes", peer, bytes.len());
+                                                println!(
+                                                    "[SYNC] Received object from {}: {} bytes",
+                                                    peer,
+                                                    bytes.len()
+                                                );
                                                 node.handle_received_object(bytes)?;
                                             }
                                         }
                                     }
                                 }
-                                
+
                                 RealmResponse::LogsChunk(_) => {
-                                    // Government should never receive logs chunks
-                                    println!("[WARN] Government received LogsChunk from {} - unexpected", peer);
+                                    println!(
+                                        "[WARN] Government received LogsChunk from {} - unexpected",
+                                        peer
+                                    );
                                 }
-                                
+
                                 RealmResponse::PushAck => {
                                     println!("[PUSH] Object push acknowledged by {}", peer);
                                 }
-                                
+
                                 RealmResponse::Error(err) => {
                                     eprintln!("[NET] Error from peer {}: {}", peer, err);
                                 }
@@ -689,106 +704,23 @@ async fn handle_government_event(
                 _ => {}
             }
         }
-        
+
         _ => {}
     }
-    
+
     Ok(())
 }
 
-// fn process_obligations(keys_dir: &str) -> Result<()> {
-//     println!("Processing obligations...\n");
-    
-//     // Load government key
-//     let signing_key_bytes = fs::read(Path::new(keys_dir).join("signing_key.bin"))?;
-//     let signing_key = SigningKey::from_bytes(&signing_key_bytes.try_into()
-//         .map_err(|_| anyhow::anyhow!("Invalid signing key"))?);
-    
-//     // Load government state
-//     let state_str = fs::read_to_string(Path::new(keys_dir).join("state.json"))?;
-//     let gov_node: GovernmentNode = serde_json::from_str(&state_str)?;
-    
-//     // Load object store
-//     let object_store = OrganizedObjectStore::new_government("./objects")?;
-    
-//     // Find all obligations
-//     let all_hashes = object_store.list_all()?;
-//     let mut processed = 0;
-    
-//     for hash in &all_hashes {
-//         if let Some(bytes) = object_store.get_object(hash)? {
-//             if let Ok(obj) = serde_json::from_slice::<RealmObject>(&bytes) {
-//                 if let RealmObject::TaxObligationEnvelope(env) = obj {
-//                     let obligation_hash = env.obligation.obligation_hash;
-                    
-//                     // Check if already processed
-//                     let receipt_exists = all_hashes.iter().any(|h| {
-//                         if let Some(b) = object_store.get_object(h).ok().flatten() {
-//                             if let Ok(RealmObject::TaxReceiptEnvelope(r)) = 
-//                                 serde_json::from_slice::<RealmObject>(&b) {
-//                                 return r.receipt.obligation_hash == obligation_hash;
-//                             }
-//                         }
-//                         false
-//                     });
-                    
-//                     if receipt_exists {
-//                         continue;
-//                     }
-                    
-//                     println!("[TASK] Processing obligation:");
-//                     println!("   User: {}", hex::encode(env.obligation.user_id.to_bytes()));
-//                     println!("   Amount: {} coins", env.obligation.coin_amount);
-                    
-//                     // Sign receipt
-//                     let receipt = sign_tax_receipt(
-//                         &gov_node,
-//                         &env.obligation,
-//                         None,
-//                         1,
-//                     )?;
-                    
-//                     // Create envelope
-//                     let receipt_bytes = serde_json::to_vec(&receipt)?;
-//                     let receipt_sig = signing_key.sign(&receipt_bytes);
-                    
-//                     let receipt_envelope = TaxReceiptEnvelope {
-//                         receipt: receipt.clone(),
-//                         signature: receipt_sig.to_bytes(),
-//                     };
-                    
-//                     // Store as object
-//                     let receipt_obj = RealmObject::TaxReceiptEnvelope(receipt_envelope);
-//                     let receipt_obj_bytes = serde_json::to_vec(&receipt_obj)?;
-//                     let receipt_hash = blake3::hash(&receipt_obj_bytes);
-                    
-//                     object_store.store_object(receipt_hash.as_bytes(), &receipt_obj_bytes)?;
-                    
-//                     println!("   [OK] Receipt signed: {}", hex::encode(receipt_hash.as_bytes()));
-//                     println!("   [OK] Coins transferred: {}\n", receipt.coins_transferred);
-                    
-//                     processed += 1;
-//                 }
-//             }
-//         }
-//     }
-    
-//     println!("=== SUMMARY ===");
-//     println!("Processed {} new obligations", processed);
-    
-//     Ok(())
-// }
 
 fn show_info(keys_dir: &str) -> Result<()> {
     let verifying_key_hex = fs::read_to_string(Path::new(keys_dir).join("verifying_key.txt"))?;
     let realm_id_hex = fs::read_to_string(Path::new(keys_dir).join("realm_id.txt"))?;
-    
+
     println!("=== GOVERNMENT NODE INFO ===\n");
     println!("Realm ID:          {}", realm_id_hex.trim());
     println!("Public Key:        {}", verifying_key_hex.trim());
     println!("Keys Directory:    {}", keys_dir);
-    
-    // Load and show genesis
+
     if let Ok(genesis_str) = fs::read_to_string(Path::new(keys_dir).join("genesis.json")) {
         if let Ok(genesis_obj) = serde_json::from_str::<RealmObject>(&genesis_str) {
             if let RealmObject::GovernmentRuleLog(log) = genesis_obj {
@@ -801,61 +733,50 @@ fn show_info(keys_dir: &str) -> Result<()> {
             }
         }
     }
-    
-    // Check object store with organized folders
+
     use realm::storage::OrganizedObjectStore;
-    
+
     if let Ok(store) = OrganizedObjectStore::new("./objects") {
         println!("\n--- OBJECT STORE (Organized) ---");
         if let Ok(stats) = store.get_stats() {
             println!("{}", stats.display());
         }
     }
-    
+
     Ok(())
 }
 
-// Helper function to load signing key
 fn load_signing_key(keys_dir: &str) -> Result<SigningKey> {
     let signing_key_bytes = fs::read(Path::new(keys_dir).join("signing_key.bin"))?;
-    Ok(SigningKey::from_bytes(&signing_key_bytes.try_into()
-        .map_err(|_| anyhow::anyhow!("Invalid signing key"))?))
+    Ok(SigningKey::from_bytes(
+        &signing_key_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid signing key"))?,
+    ))
 }
 
 fn set_tax(keys_dir: &str, new_amount: u64) -> Result<()> {
     use realm::gov::rule_manager;
-    
+
     println!("Setting new tax amount...\n");
-    
-    // Load signing key
     let signing_key = load_signing_key(keys_dir)?;
-    
-    // Load object store
     let object_store = OrganizedObjectStore::new_government("./objects")?;
-    
-    // Get latest log
     let current_log = rule_manager::get_latest_log(&object_store)?;
-    
+
     println!("Current tax: {} coins", current_log.tax_amount);
     println!("New tax: {} coins", new_amount);
-    
-    // Create new log
-    let new_log = rule_manager::create_tax_update(
-        &current_log,
-        new_amount,
-        &signing_key,
-    )?;
-    
-    // Save to storage
+    let new_log = rule_manager::create_tax_update(&current_log, new_amount, &signing_key)?;
     let obj = RealmObject::GovernmentRuleLog(new_log.clone());
     let obj_bytes = serde_json::to_vec(&obj)?;
     let obj_hash = blake3::hash(&obj_bytes);
     object_store.store_object(obj_hash.as_bytes(), &obj_bytes)?;
-    
-    println!("\n✓ Tax updated to {} coins (version {})", 
-             new_log.tax_amount, new_log.version_number);
+
+    println!(
+        "\n✓ Tax updated to {} coins (version {})",
+        new_log.tax_amount, new_log.version_number
+    );
     println!("  Object hash: {}", hex::encode(obj_hash.as_bytes()));
-    
+
     Ok(())
 }
 
@@ -868,15 +789,19 @@ fn add_task(
     capital: u64,
 ) -> Result<()> {
     use realm::gov::rule_manager;
-    
+
     println!("Adding new task rule...\n");
-    
+
     let signing_key = load_signing_key(keys_dir)?;
     let object_store = OrganizedObjectStore::new_government("./objects")?;
     let current_log = rule_manager::get_latest_log(&object_store)?;
-    
-    let resources = Resources { land, labor, capital };
-    
+
+    let resources = Resources {
+        land,
+        labor,
+        capital,
+    };
+
     let new_log = rule_manager::create_add_task(
         &current_log,
         name.clone(),
@@ -884,16 +809,18 @@ fn add_task(
         resources,
         &signing_key,
     )?;
-    
+
     let obj = RealmObject::GovernmentRuleLog(new_log.clone());
     let obj_bytes = serde_json::to_vec(&obj)?;
     let obj_hash = blake3::hash(&obj_bytes);
     object_store.store_object(obj_hash.as_bytes(), &obj_bytes)?;
-    
-    println!("✓ Added task '{}' with multiplier {} (version {})",
-             name, multiplier, new_log.version_number);
+
+    println!(
+        "✓ Added task '{}' with multiplier {} (version {})",
+        name, multiplier, new_log.version_number
+    );
     println!("  Object hash: {}", hex::encode(obj_hash.as_bytes()));
-    
+
     Ok(())
 }
 
@@ -906,13 +833,13 @@ fn modify_task(
     capital: Option<u64>,
 ) -> Result<()> {
     use realm::gov::rule_manager;
-    
+
     println!("Modifying task '{}'...\n", name);
-    
+
     let signing_key = load_signing_key(keys_dir)?;
     let object_store = OrganizedObjectStore::new_government("./objects")?;
     let current_log = rule_manager::get_latest_log(&object_store)?;
-    
+
     let new_log = rule_manager::create_modify_task(
         &current_log,
         name,
@@ -922,63 +849,67 @@ fn modify_task(
         capital,
         &signing_key,
     )?;
-    
+
     let obj = RealmObject::GovernmentRuleLog(new_log.clone());
     let obj_bytes = serde_json::to_vec(&obj)?;
     let obj_hash = blake3::hash(&obj_bytes);
     object_store.store_object(obj_hash.as_bytes(), &obj_bytes)?;
-    
-    println!("✓ Modified task '{}' (version {})", name, new_log.version_number);
+
+    println!(
+        "✓ Modified task '{}' (version {})",
+        name, new_log.version_number
+    );
     println!("  Object hash: {}", hex::encode(obj_hash.as_bytes()));
-    
+
     Ok(())
 }
 
 fn remove_task(keys_dir: &str, name: &str) -> Result<()> {
     use realm::gov::rule_manager;
-    
+
     println!("Removing task '{}'...\n", name);
-    
+
     let signing_key = load_signing_key(keys_dir)?;
     let object_store = OrganizedObjectStore::new_government("./objects")?;
     let current_log = rule_manager::get_latest_log(&object_store)?;
-    
-    let new_log = rule_manager::create_remove_task(
-        &current_log,
-        name,
-        &signing_key,
-    )?;
-    
+
+    let new_log = rule_manager::create_remove_task(&current_log, name, &signing_key)?;
+
     let obj = RealmObject::GovernmentRuleLog(new_log.clone());
     let obj_bytes = serde_json::to_vec(&obj)?;
     let obj_hash = blake3::hash(&obj_bytes);
     object_store.store_object(obj_hash.as_bytes(), &obj_bytes)?;
-    
-    println!("✓ Removed task '{}' (version {})", name, new_log.version_number);
+
+    println!(
+        "✓ Removed task '{}' (version {})",
+        name, new_log.version_number
+    );
     println!("  Object hash: {}", hex::encode(obj_hash.as_bytes()));
-    
+
     Ok(())
 }
 
 fn show_rules(keys_dir: &str) -> Result<()> {
     let _ = keys_dir;
     use realm::gov::rule_manager;
-    
+
     let object_store = OrganizedObjectStore::new_government("./objects")?;
     let current_log = rule_manager::get_latest_log(&object_store)?;
-    
+
     println!("Government Rules (Version {})", current_log.version_number);
     println!("Tax Amount: {} coins\n", current_log.tax_amount);
-    
+
     println!("Economic Activities:");
     for rule in &current_log.state_rules {
-        println!("  • {}: multiplier={}, requires land={}, labor={}, capital={}",
-                 rule.task_name,
-                 rule.coin_multiplier,
-                 rule.required_resources.land,
-                 rule.required_resources.labor,
-                 rule.required_resources.capital);
+        println!(
+            "  • {}: multiplier={}, requires land={}, labor={}, capital={}",
+            rule.task_name,
+            rule.coin_multiplier,
+            rule.required_resources.land,
+            rule.required_resources.labor,
+            rule.required_resources.capital
+        );
     }
-    
+
     Ok(())
 }

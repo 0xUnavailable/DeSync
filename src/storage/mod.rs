@@ -9,7 +9,6 @@ pub use log_index::{LogVersionIndex, build_index_from_store};
 use anyhow::Result;
 use crate::types::HASH;
 
-/// Common interface for object stores
 pub trait ObjectStoreInterface {
     fn list_all(&self) -> Result<Vec<HASH>>;
     fn get_object(&self, hash: &HASH) -> Result<Option<Vec<u8>>>;

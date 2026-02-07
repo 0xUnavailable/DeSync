@@ -2,20 +2,14 @@ pub mod libp2p;
 pub mod protocol;
 pub mod sync;
 pub mod state_apply;
-
 pub use libp2p::*;
 pub use protocol::*;
-
 use crate::types::NodeRole;
 
-/// Information tracked about each connected peer
 #[derive(Clone, Debug)]
 pub struct PeerInfo {
-    /// Role of this peer in the network
     pub role: NodeRole,
-    /// Last known head version
     pub head_version: u64,
-    /// Whether handshake is complete
     pub handshake_complete: bool,
 }
 

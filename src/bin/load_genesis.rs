@@ -1,5 +1,5 @@
-use realm::storage::OrganizedObjectStore;
 use std::fs;
+use realm::storage::OrganizedObjectStore;
 
 fn main() -> anyhow::Result<()> {
     let genesis_bytes = fs::read("genesis_log.json")?;

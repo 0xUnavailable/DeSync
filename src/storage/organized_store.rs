@@ -1,9 +1,8 @@
-use anyhow::{Result, bail};
-use std::path::{Path, PathBuf};
 use std::fs;
-use crate::types::{HASH, RealmObject};
+use anyhow::{bail, Result};
+use std::path::{Path, PathBuf};
+use crate::types::{RealmObject, HASH};
 
-/// Object type categories for organized storage
 #[derive(Debug, Clone, Copy)]
 pub enum ObjectType {
     GovernmentLog,
@@ -21,7 +20,7 @@ impl ObjectType {
             ObjectType::P2PReceipt => "03_p2p_receipts",
         }
     }
-    
+
     pub fn from_object(obj: &RealmObject) -> Self {
         match obj {
             RealmObject::GovernmentRuleLog(_) => ObjectType::GovernmentLog,
@@ -32,104 +31,102 @@ impl ObjectType {
     }
 }
 
-/// Enhanced object store with organized folders by type
- pub struct OrganizedObjectStore {
+pub struct OrganizedObjectStore {
     base_path: PathBuf,
     is_government: bool,
 }
 
 impl OrganizedObjectStore {
-    /// Create store for user node (all folders)
     pub fn new<P: AsRef<Path>>(base_path: P) -> Result<Self> {
         Self::with_config(base_path, false)
     }
-    
-    /// Create store for government node (no P2P receipts folder)
+
     pub fn new_government<P: AsRef<Path>>(base_path: P) -> Result<Self> {
         Self::with_config(base_path, true)
     }
-    
+
     fn with_config<P: AsRef<Path>>(base_path: P, is_government: bool) -> Result<Self> {
         let base_path = base_path.as_ref().to_path_buf();
         fs::create_dir_all(&base_path)?;
-        
-        // Create folders based on node type
+
         let mut folders = vec![
             ObjectType::GovernmentLog,
             ObjectType::TaxObligation,
             ObjectType::TaxReceipt,
         ];
-        
-        // User nodes also need P2P receipts folder
+
         if !is_government {
             folders.push(ObjectType::P2PReceipt);
         }
-        
+
         for obj_type in folders {
             fs::create_dir_all(base_path.join(obj_type.folder_name()))?;
         }
-        
-        Ok(Self { base_path, is_government })
+
+        Ok(Self {
+            base_path,
+            is_government,
+        })
     }
-    
-    /// Store an object with automatic type detection and organization
+
     pub fn put(&self, hash: HASH, bytes: Vec<u8>) -> Result<()> {
-        // Verify hash matches content
         let computed_hash = blake3::hash(&bytes);
-    if computed_hash.as_bytes() != &hash {
-        bail!("Hash mismatch: provided hash does not match content");
-    }
-    
-    // Try to deserialize to determine type
-    let obj_type = match serde_json::from_slice::<RealmObject>(&bytes) {
-        Ok(obj) => ObjectType::from_object(&obj),
-        Err(_) => bail!("Cannot store unknown object type - must be a valid RealmObject"),
-    };
-    
-    let path = self.object_path(&hash, obj_type);
-        
-        // Create parent directory if it doesn't exist
+        if computed_hash.as_bytes() != &hash {
+            bail!("Hash mismatch: provided hash does not match content");
+        }
+
+        let obj_type = match serde_json::from_slice::<RealmObject>(&bytes) {
+            Ok(obj) => ObjectType::from_object(&obj),
+            Err(_) => bail!("Cannot store unknown object type - must be a valid RealmObject"),
+        };
+
+        let path = self.object_path(&hash, obj_type);
+
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        
-        // Write atomically using a temporary file
+
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, &bytes)?;
         fs::rename(&temp_path, &path)?;
-        
+
         Ok(())
     }
-    
-    /// Retrieve an object by its hash (searches all type folders)
+
     pub fn get(&self, hash: &HASH) -> Result<Option<Vec<u8>>> {
-         // Try each object type folder
-    let folders = if self.is_government {
-        vec![ObjectType::GovernmentLog, ObjectType::TaxObligation, ObjectType::TaxReceipt]
-    } else {
-        vec![ObjectType::GovernmentLog, ObjectType::TaxObligation, ObjectType::TaxReceipt, ObjectType::P2PReceipt]
-    };
-    
-    for obj_type in folders {
-        let path = self.object_path(hash, obj_type);
-        
-        if path.exists() {
-            let bytes = fs::read(&path)?;
-            
-            // Verify integrity on read
-            let computed_hash = blake3::hash(&bytes);
-            if computed_hash.as_bytes() != hash {
-                bail!("Integrity check failed: stored object hash mismatch");
+        let folders = if self.is_government {
+            vec![
+                ObjectType::GovernmentLog,
+                ObjectType::TaxObligation,
+                ObjectType::TaxReceipt,
+            ]
+        } else {
+            vec![
+                ObjectType::GovernmentLog,
+                ObjectType::TaxObligation,
+                ObjectType::TaxReceipt,
+                ObjectType::P2PReceipt,
+            ]
+        };
+
+        for obj_type in folders {
+            let path = self.object_path(hash, obj_type);
+
+            if path.exists() {
+                let bytes = fs::read(&path)?;
+
+                let computed_hash = blake3::hash(&bytes);
+                if computed_hash.as_bytes() != hash {
+                    bail!("Integrity check failed: stored object hash mismatch");
+                }
+
+                return Ok(Some(bytes));
             }
-            
-            return Ok(Some(bytes));
         }
+
+        Ok(None)
     }
-    
-    Ok(None)
-}
-    
-    /// Check if an object exists
+
     pub fn has(&self, hash: &HASH) -> bool {
         for obj_type in [
             ObjectType::GovernmentLog,
@@ -143,8 +140,7 @@ impl OrganizedObjectStore {
         }
         false
     }
-    
-    /// Delete an object by its hash
+
     pub fn delete(&self, hash: &HASH) -> Result<bool> {
         for obj_type in [
             ObjectType::GovernmentLog,
@@ -153,38 +149,37 @@ impl OrganizedObjectStore {
             ObjectType::P2PReceipt,
         ] {
             let path = self.object_path(hash, obj_type);
-            
+
             if path.exists() {
                 fs::remove_file(&path)?;
                 return Ok(true);
             }
         }
-        
+
         Ok(false)
     }
-    
-    /// List all objects of a specific type
+
     pub fn list_by_type(&self, obj_type: ObjectType) -> Result<Vec<HASH>> {
         let mut hashes = Vec::new();
         let folder = self.base_path.join(obj_type.folder_name());
-        
+
         if !folder.exists() {
             return Ok(hashes);
         }
-        
+
         for entry in fs::read_dir(&folder)? {
             let entry = entry?;
             let fanout_path = entry.path();
-            
+
             if !fanout_path.is_dir() {
                 continue;
             }
-            
+
             for obj_entry in fs::read_dir(&fanout_path)? {
                 let obj_entry = obj_entry?;
                 let file_name = obj_entry.file_name();
                 let file_str = file_name.to_string_lossy();
-                
+
                 if let Some(fanout_prefix) = fanout_path.file_name() {
                     let full_hash_str = format!("{}{}", fanout_prefix.to_string_lossy(), file_str);
                     if let Ok(hash_bytes) = hex::decode(&full_hash_str) {
@@ -197,14 +192,13 @@ impl OrganizedObjectStore {
                 }
             }
         }
-        
+
         Ok(hashes)
     }
-    
-    /// List all object hashes across all types
+
     pub fn list_all(&self) -> Result<Vec<HASH>> {
         let mut all_hashes = Vec::new();
-        
+
         for obj_type in [
             ObjectType::GovernmentLog,
             ObjectType::TaxObligation,
@@ -213,24 +207,22 @@ impl OrganizedObjectStore {
         ] {
             all_hashes.extend(self.list_by_type(obj_type)?);
         }
-        
+
         Ok(all_hashes)
     }
-    
-    /// Alias methods for compatibility
+
     pub fn has_object(&self, hash: &HASH) -> bool {
         self.has(hash)
     }
-    
+
     pub fn store_object(&self, hash: &HASH, bytes: &[u8]) -> Result<()> {
         self.put(*hash, bytes.to_vec())
     }
-    
+
     pub fn get_object(&self, hash: &HASH) -> Result<Option<Vec<u8>>> {
         self.get(hash)
     }
-    
-    /// Get statistics about stored objects
+
     pub fn get_stats(&self) -> Result<ObjectStoreStats> {
         Ok(ObjectStoreStats {
             government_logs: self.list_by_type(ObjectType::GovernmentLog)?.len(),
@@ -239,14 +231,12 @@ impl OrganizedObjectStore {
             p2p_receipts: self.list_by_type(ObjectType::P2PReceipt)?.len(),
         })
     }
-    
-    /// Get the filesystem path for an object
-    /// Uses type-based folder + two-byte fanout: objects/tax_receipts/ab/cd1234...
+
     fn object_path(&self, hash: &HASH, obj_type: ObjectType) -> PathBuf {
         let hash_hex = hex::encode(hash);
         let fanout = &hash_hex[..2];
         let remainder = &hash_hex[2..];
-        
+
         self.base_path
             .join(obj_type.folder_name())
             .join(fanout)
@@ -265,7 +255,7 @@ impl ObjectStoreStats {
     pub fn total(&self) -> usize {
         self.government_logs + self.tax_obligations + self.tax_receipts + self.p2p_receipts
     }
-    
+
     pub fn display(&self) -> String {
         format!(
             "Object Store Stats:\n\
@@ -283,20 +273,19 @@ impl ObjectStoreStats {
     }
 }
 
-// Implement the common interface trait
 impl crate::storage::ObjectStoreInterface for OrganizedObjectStore {
     fn list_all(&self) -> Result<Vec<crate::types::HASH>> {
         self.list_all()
     }
-    
+
     fn get_object(&self, hash: &crate::types::HASH) -> Result<Option<Vec<u8>>> {
         self.get(hash)
     }
-    
+
     fn store_object(&self, hash: &crate::types::HASH, bytes: &[u8]) -> Result<()> {
         self.put(*hash, bytes.to_vec())
     }
-    
+
     fn has_object(&self, hash: &crate::types::HASH) -> bool {
         self.has(hash)
     }

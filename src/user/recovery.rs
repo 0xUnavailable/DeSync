@@ -1,18 +1,14 @@
-
 use anyhow::Result;
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 
 use crate::network::libp2p::NodeState;
-use crate::utils::persistence::{PersistentRecord, load_events, load_snapshot};
+use crate::utils::persistence::{load_events, load_snapshot, PersistentRecord};
 
-/// Recover NodeState from persistent storage
 pub fn recover_state() -> Result<NodeState> {
-    // Try to load snapshot first
     if let Some(snapshot) = load_snapshot()? {
         return Ok(snapshot);
     }
 
-    // Otherwise, rebuild from events
     let events = load_events()?;
     let mut state = NodeState {
         realm_id: [0u8; 32],
@@ -30,22 +26,19 @@ pub fn recover_state() -> Result<NodeState> {
     for record in events {
         match record {
             PersistentRecord::GovernmentLog(log) => {
-                // Update realm_id from first government log
                 if state.realm_id == [0u8; 32] {
                     state.realm_id = log.realm_id;
                 }
-                
-                // Store as previous if we have a current one
+
                 if let Some(current) = state.latest_government_log.take() {
                     state.previous_government_log = Some(current);
                 }
-                
+
                 state.latest_government_log = Some(log.clone());
                 state.latest_gov_log_version = log.version_number;
             }
 
             PersistentRecord::TaxObligation(env) => {
-                // Add to pending obligations
                 let hash = env.obligation.obligation_hash;
                 if !state.pending_obligations.contains_key(&hash) {
                     state.pending_obligations.insert(hash, env.clone());
@@ -54,12 +47,13 @@ pub fn recover_state() -> Result<NodeState> {
             }
 
             PersistentRecord::TaxReceipt(env) => {
-                let receipt_hash = *blake3::hash(&crate::utils::serialize(&env.receipt).unwrap()).as_bytes();
-                
-                // Remove from pending if this receipt matches an obligation
-                state.pending_obligations.remove(&env.receipt.obligation_hash);
-                
-                // Add to receipts if not seen
+                let receipt_hash =
+                    *blake3::hash(&crate::utils::serialize(&env.receipt).unwrap()).as_bytes();
+
+                state
+                    .pending_obligations
+                    .remove(&env.receipt.obligation_hash);
+
                 if state.seen_receipts.insert(receipt_hash) {
                     state.tax_receipts.push(env);
                 }
@@ -70,24 +64,18 @@ pub fn recover_state() -> Result<NodeState> {
             }
 
             PersistentRecord::ChatMessage(_) => {
-                // Chat messages are no longer part of core state
-                // Ignore for now - can be handled separately if needed
+                // SOON
             }
 
             PersistentRecord::TaskStarted(_) => {
-                // Task started events are logged for audit purposes
-                // They don't affect the network state reconstruction
-                // User state is managed separately in user_state.json
+              // SOON
             }
 
             PersistentRecord::TaskHarvested(_) => {
-                // Task harvested events are logged for audit purposes
-                // They don't affect the network state reconstruction
-                // User state is managed separately in user_state.json
+               // SOON
             }
         }
     }
 
     Ok(state)
 }
-

@@ -1,15 +1,14 @@
-use serde::{Deserialize, Serialize};
-use anyhow::Result;
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use anyhow::Result;
 use std::path::Path;
-
-use crate::types::{
-    GovernmentRuleLog, TaxObligationEnvelope, TaxReceiptEnvelope,
-    ReceiptEnvelope, ChatMessageEnvelope,
-};
+use std::io::{BufReader, BufWriter};
+use serde::{Deserialize, Serialize};
 use crate::network::libp2p::NodeState;
 use crate::utils::file_protection::ProtectedFile;
+use crate::types::{
+    ChatMessageEnvelope, GovernmentRuleLog, ReceiptEnvelope, TaxObligationEnvelope,
+    TaxReceiptEnvelope,
+};
 
 const SNAPSHOT_PATH: &str = "node-snapshot.json";
 const EVENT_LOG_PATH: &str = "node-events.jsonl";
@@ -53,7 +52,7 @@ pub fn load_snapshot() -> Result<Option<NodeState>> {
     if !Path::new(SNAPSHOT_PATH).exists() {
         return Ok(None);
     }
-    
+
     let file = File::open(SNAPSHOT_PATH)?;
     let reader = BufReader::new(file);
     let state = serde_json::from_reader(reader)?;
@@ -69,20 +68,20 @@ pub fn append_event(record: &PersistentRecord) -> Result<()> {
 
 pub fn load_events() -> Result<Vec<PersistentRecord>> {
     let protected = ProtectedFile::new(EVENT_LOG_PATH);
-    
+
     if !protected.exists() {
         return Ok(Vec::new());
     }
-    
+
     let lines = protected.read_lines()?;
     let mut records = Vec::new();
-    
+
     for line in lines {
         if !line.is_empty() {
             let record: PersistentRecord = serde_json::from_str(&line)?;
             records.push(record);
         }
     }
-    
+
     Ok(records)
 }

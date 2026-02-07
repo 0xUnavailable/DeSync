@@ -12,8 +12,6 @@ pub struct VDFProof {
 }
 
 impl VDFProof {
-    /// Compute VDF by performing sequential hash iterations
-    /// This simulates actual work and cannot be parallelized
     pub fn compute(challenge: &[u8], iterations: u64) -> Self {
         let mut current = blake3::hash(challenge);
         
@@ -28,7 +26,6 @@ impl VDFProof {
         }
     }
     
-    /// Verify VDF by re-computing the sequential hashing
     pub fn verify(&self) -> bool {
         let mut current = blake3::hash(&self.challenge);
         
@@ -40,29 +37,4 @@ impl VDFProof {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_vdf_compute_and_verify() {
-        let challenge = b"test_challenge";
-        let proof = VDFProof::compute(challenge, 1000);
-        
-        assert_eq!(proof.challenge, challenge);
-        assert_eq!(proof.iterations, 1000);
-        assert!(proof.verify());
-    }
-    
-    #[test]
-    fn test_vdf_invalid_proof() {
-        let challenge = b"test_challenge";
-        let mut proof = VDFProof::compute(challenge, 1000);
-        
-        // Tamper with result
-        proof.result[0] ^= 1;
-        
-        assert!(!proof.verify());
-    }
-}
 

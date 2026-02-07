@@ -1,6 +1,5 @@
-
-use ed25519_dalek::{SigningKey, Signature, Signer, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
+use ed25519_dalek::{SigningKey, Signature, Signer, Verifier, VerifyingKey};
 
 pub fn generate_keypair() -> SigningKey {
     let mut csprng = OsRng;

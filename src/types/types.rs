@@ -1,30 +1,33 @@
-use serde::{Deserialize, Serialize};
-use ed25519_dalek::VerifyingKey;
 pub type HASH = [u8; 32];
 use serde_big_array::BigArray;
+use ed25519_dalek::VerifyingKey;
+use serde::{Deserialize, Serialize};
 
-// Serde helpers for VerifyingKey
 mod verifying_key_serde {
     use super::*;
-    
+
     pub fn serialize<S>(key: &ed25519_dalek::VerifyingKey, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         serializer.serialize_bytes(key.as_bytes())
     }
-    
+
     pub fn deserialize<'de, D>(deserializer: D) -> Result<ed25519_dalek::VerifyingKey, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-        ed25519_dalek::VerifyingKey::from_bytes(bytes.as_slice().try_into().map_err(serde::de::Error::custom)?)
-            .map_err(serde::de::Error::custom)
+        ed25519_dalek::VerifyingKey::from_bytes(
+            bytes
+                .as_slice()
+                .try_into()
+                .map_err(serde::de::Error::custom)?,
+        )
+        .map_err(serde::de::Error::custom)
     }
 }
 
-/// Node role in the Realm network
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Copy)]
 pub enum NodeRole {
     Government,
@@ -40,7 +43,6 @@ impl NodeRole {
     }
 }
 
-/// Hello message exchanged on connection to identify peer role
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct HelloMessage {
     pub role: NodeRole,
@@ -53,7 +55,7 @@ pub struct GovernmentRuleLog {
     pub realm_id: HASH,
     pub previous_log_hash: HASH,
     pub state_rules: Vec<ActionRule>,
-    pub tax_amount: u64,  // NEW: Tax amount for this version
+    pub tax_amount: u64, 
     pub log_hash: HASH,
     #[serde(with = "BigArray")]
     pub government_signature: [u8; 64],
@@ -163,8 +165,6 @@ pub struct ChatMessageEnvelope {
     pub signature: [u8; 64],
 }
 
-/// Canonical enum for all synced objects in Realm
-/// This is the single sync unit - all network-exchanged data must be wrapped in this enum
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum RealmObject {
     GovernmentRuleLog(GovernmentRuleLog),
@@ -174,20 +174,16 @@ pub enum RealmObject {
 }
 
 impl RealmObject {
-    /// Compute hash of this object
     pub fn compute_hash(&self) -> HASH {
         let bytes = serde_json::to_vec(self).expect("serialization should not fail");
         blake3::hash(&bytes).into()
     }
-    
-    /// Verify signature based on object type
+
     pub fn verify_signature(&self, gov_key: &VerifyingKey) -> bool {
         use ed25519_dalek::{Signature, Verifier};
-        
+
         match self {
             RealmObject::GovernmentRuleLog(log) => {
-                // Verify government signature on log_hash
-                // The signature is created by signing the log_hash directly in generate_genesis_government_log
                 let sig = match Signature::try_from(&log.government_signature[..]) {
                     Ok(s) => s,
                     Err(_) => return false,
@@ -195,9 +191,8 @@ impl RealmObject {
                 gov_key.verify(&log.log_hash, &sig).is_ok()
             }
             RealmObject::TaxReceiptEnvelope(env) => {
-                // Verify government signature on receipt
                 let msg = serde_json::to_vec(&env.receipt).expect("serialization");
-                
+
                 let sig = match Signature::try_from(&env.signature[..]) {
                     Ok(s) => s,
                     Err(_) => return false,
@@ -205,9 +200,8 @@ impl RealmObject {
                 gov_key.verify(&msg, &sig).is_ok()
             }
             RealmObject::TaxObligationEnvelope(env) => {
-                // Verify user signature on obligation
                 let msg = serde_json::to_vec(&env.obligation).expect("serialization");
-                
+
                 let sig = match Signature::try_from(&env.signature[..]) {
                     Ok(s) => s,
                     Err(_) => return false,
@@ -215,9 +209,8 @@ impl RealmObject {
                 env.obligation.user_id.verify(&msg, &sig).is_ok()
             }
             RealmObject::P2PReceiptEnvelope(env) => {
-                // Verify sender signature on P2P receipt
                 let msg = serde_json::to_vec(&env.receipt).expect("serialization");
-                
+
                 let sig = match Signature::try_from(&env.signature[..]) {
                     Ok(s) => s,
                     Err(_) => return false,
