@@ -432,7 +432,7 @@ This guarantees:
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/yourusername/desync.git
+   git clone https://github.com/0xunavailable/desync.git
    cd desync
    ```
 
