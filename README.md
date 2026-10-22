@@ -82,24 +82,3 @@ cargo build --release
 ```
 
 This creates the production binaries (`government`, `user`, `load_genesis`) in `target/release/`.
-
-## Roadmap
-
-### Current Features (v0.1)
-
-- Government node with rule management
-- User nodes with state management
-- Task-based economics with VDF
-- Taxation system
-- P2P transactions
-- LibP2P networking
-- Cryptographic verification
-- CLI management wrapper
-
-### Planned Features
-
-- Proof of interaction for tasks
-- Messaging capability
-- Decentralized government nodes
-- Government council (for task suggestions by users)
-- Factions for users within realms
